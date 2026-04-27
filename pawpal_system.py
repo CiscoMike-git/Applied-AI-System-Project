@@ -1,7 +1,10 @@
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from heapq import heapify, heappop, heappush
 from typing import List, Optional, Tuple
+
+logger = logging.getLogger("petwise.system")
 
 
 PRIORITY_RANK = {"high": 0, "medium": 1, "low": 2}
@@ -77,10 +80,10 @@ class Task:
         period = FREQUENCY_DAYS[self.frequency]
         return max(0.0, days_since / period - 1.0)
 
-    def scheduling_value(self, current_slot: Optional[str] = None) -> float:
+    def scheduling_value(self, covered_slots: frozenset = frozenset()) -> float:
         """Compute a scheduling value based on priority, urgency, and slot match."""
         base = PRIORITY_VALUE[self.priority]
-        slot_bonus = 0.5 if (current_slot and self.preferred_slot == current_slot) else 0.0
+        slot_bonus = 0.5 if (self.preferred_slot and self.preferred_slot in covered_slots) else 0.0
         return base * (1.0 + self.urgency_multiplier()) + slot_bonus
 
 
@@ -126,6 +129,28 @@ class Owner:
             h, m = map(int, t.split(":"))
             return h * 60 + m
         return float(sum(max(0, _to_min(end) - _to_min(start)) for start, end in self.time_available))
+
+    @property
+    def covered_slots(self) -> frozenset:
+        """Return the set of time-of-day slots that have any available minutes.
+
+        Slot boundaries: morning 00:00–11:59, afternoon 12:00–16:59, evening 17:00–23:59.
+        """
+        if not self.time_available:
+            return frozenset()
+        _BOUNDARIES = [("morning", 0, 720), ("afternoon", 720, 1020), ("evening", 1020, 1440)]
+
+        def _to_min(t: str) -> int:
+            h, m = map(int, t.split(":"))
+            return h * 60 + m
+
+        result = set()
+        for start, end in self.time_available:
+            s, e = _to_min(start), _to_min(end)
+            for slot, lo, hi in _BOUNDARIES:
+                if min(e, hi) - max(s, lo) > 0:
+                    result.add(slot)
+        return frozenset(result)
 
     def set_name(self, name: str) -> None:
         """Set the owner's name, raising ValueError if empty or whitespace."""
@@ -209,14 +234,22 @@ class Scheduler:
         self.owner = owner
 
     @staticmethod
-    def _knapsack_select(pairs: list, capacity: float, current_slot: Optional[str] = None) -> list:
+    def _is_due(task: "Task") -> bool:
+        """Return True if a task is due today (overdue, never done, or one-time)."""
+        if task.frequency is None or task.last_done is None:
+            return True
+        days_since = (datetime.now() - task.last_done).days
+        return days_since >= FREQUENCY_DAYS[task.frequency]
+
+    @staticmethod
+    def _knapsack_select(pairs: list, capacity: float, covered_slots: frozenset = frozenset()) -> list:
         """Return the subset of (pet, task) pairs that maximises total value within capacity."""
         n = len(pairs)
         if n == 0 or capacity <= 0:
             return []
         cap = int(capacity)
         weights = [max(1, p[1].duration) for p in pairs]
-        values = [p[1].scheduling_value(current_slot) for p in pairs]
+        values = [p[1].scheduling_value(covered_slots) for p in pairs]
 
         # Standard 0/1 knapsack DP — O(n * cap) time and space
         dp = [[0.0] * (cap + 1) for _ in range(n + 1)]
@@ -264,12 +297,16 @@ class Scheduler:
 
     @staticmethod
     def _assign_start_times(selected: list, time_available: List[Tuple[str, str]]) -> None:
-        """Pack selected tasks sequentially into the owner's time windows, writing task.time for each.
+        """Pack selected tasks into the owner's time windows, writing task.time for each.
 
-        Tasks are never split across non-consecutive windows: a task is only placed when
-        cursor + duration <= win_end, guaranteeing it fits entirely within a single window.
-        If no remaining window can fit a task it is assigned time = None.
+        Each task is placed in the earliest window whose slot matches the task's preferred_slot
+        and that has enough remaining capacity. If no preferred-slot window can fit the task,
+        it falls back to the earliest window of any slot that can fit it. A window's slot is
+        determined by its start time: morning 00:00–11:59, afternoon 12:00–16:59, evening 17:00+.
+        Tasks that cannot fit in any window are assigned time = None.
         """
+        _SLOT_BOUNDS = [("morning", 0, 720), ("afternoon", 720, 1020), ("evening", 1020, 1440)]
+
         def to_min(t: str) -> int:
             h, m = map(int, t.split(":"))
             return h * 60 + m
@@ -277,35 +314,39 @@ class Scheduler:
         def to_hhmm(minutes: int) -> str:
             return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
-        # Sort windows chronologically so we fill them in order
+        def window_slot(win_start: int) -> str:
+            for slot, lo, hi in _SLOT_BOUNDS:
+                if lo <= win_start < hi:
+                    return slot
+            return "evening"
+
         windows = sorted((to_min(s), to_min(e)) for s, e in time_available)
         if not windows:
             for _, task in selected:
                 task.time = None
             return
 
-        window_idx = 0
-        cursor = windows[0][0]
+        # Each entry is [win_start, win_end, cursor] where cursor tracks the next free minute.
+        win_state = [[ws, we, ws] for ws, we in windows]
+
+        def try_place(candidates: list, duration: int) -> bool:
+            for w in candidates:
+                if w[2] + duration <= w[1]:
+                    task.time = to_hhmm(w[2])
+                    w[2] += duration
+                    return True
+            return False
 
         for _, task in selected:
             duration = max(1, task.duration)
-            assigned = None
-            # Advance through windows until we find one where the full task fits
-            while window_idx < len(windows):
-                win_start, win_end = windows[window_idx]
-                # Move cursor to at least the start of this window
-                cursor = max(cursor, win_start)
-                if cursor + duration <= win_end:
-                    # Task fits entirely within this window — place it
-                    assigned = to_hhmm(cursor)
-                    cursor += duration
-                    break
-                else:
-                    # Task does not fit; advance to the next window
-                    window_idx += 1
-                    if window_idx < len(windows):
-                        cursor = windows[window_idx][0]
-            task.time = assigned
+            placed = False
+            if task.preferred_slot:
+                preferred = [w for w in win_state if window_slot(w[0]) == task.preferred_slot]
+                placed = try_place(preferred, duration)
+            if not placed:
+                placed = try_place(win_state, duration)
+            if not placed:
+                task.time = None
 
     @staticmethod
     def _build_explanation(
@@ -314,7 +355,7 @@ class Scheduler:
         skipped: list,
         time_used: float,
         completion_ratio: float,
-        current_slot: Optional[str],
+        covered_slots: frozenset,
         selected: list,
     ) -> str:
         """Build a human-readable explanation of the scheduling result."""
@@ -347,8 +388,8 @@ class Scheduler:
                 lines.append(
                     "Dependency ordering was applied where tasks specify a 'depends_on' constraint."
                 )
-            if current_slot:
-                lines.append(f"Tasks matching the '{current_slot}' time slot were preferred.")
+            if covered_slots:
+                lines.append("Tasks whose preferred time slot matched your availability windows were prioritized.")
 
         if skipped:
             word = "task was" if len(skipped) == 1 else "tasks were"
@@ -416,7 +457,7 @@ class Scheduler:
         if self.owner:
             for pet in self.owner.pets:
                 for task in pet.tasks:
-                    if task.time:
+                    if task.time and not task.completed:
                         timed.append((pet.name, task))
 
         warnings: List[str] = []
@@ -460,6 +501,13 @@ class Scheduler:
         if task.completed:
             raise ValueError(f"Task '{task_name}' is already completed.")
 
+        if task.depends_on:
+            prereq = next((t for t in pet.tasks if t.name == task.depends_on), None)
+            if prereq is not None and not prereq.completed:
+                raise ValueError(
+                    f"Cannot complete '{task_name}': '{task.depends_on}' must be completed first."
+                )
+
         task.mark_complete()
 
         if task.frequency not in ("daily", "weekly", "monthly"):
@@ -488,27 +536,26 @@ class Scheduler:
             time=None,
         )
         pet.add_task(next_task)
+        logger.info(
+            "Task completed: pet='%s', task='%s', next_occurrence='%s'",
+            pet_name, task_name, next_task.name,
+        )
         return next_task
 
-    def create_schedule(self, current_slot: Optional[str] = None) -> dict: # schould overwrite the old one (and any time data)
+    def create_schedule(self) -> dict:
         """Build and return a prioritised schedule of pet tasks within the owner's available time.
 
         Uses a 0/1 knapsack algorithm to select the highest-value tasks that fit within the
         time budget. Value is derived from priority, urgency (how overdue a recurring task is),
-        and whether the task matches the optional current_slot. Selected tasks are then grouped
-        by pet (to minimise owner context-switching) and reordered to satisfy any depends_on
-        constraints.
-
-        Args:
-            current_slot: Optional time-of-day hint ('morning', 'afternoon', 'evening').
-                          Tasks whose preferred_slot matches receive a scheduling bonus.
+        and whether the task's preferred_slot falls within the owner's availability windows.
+        Selected tasks are then grouped by pet (to minimise owner context-switching) and
+        reordered to satisfy any depends_on constraints.
         """
         if self.owner is None:
             raise ValueError("Cannot create schedule: no owner assigned.")
-        if current_slot is not None and current_slot not in VALID_SLOTS:
-            raise ValueError(f"current_slot must be one of {VALID_SLOTS} or None.")
 
         owner = self.owner
+        covered_slots = owner.covered_slots
 
         if not owner.pets:
             return {
@@ -518,13 +565,26 @@ class Scheduler:
                 "explanation": f"{owner.name} has no pets registered. Add a pet and its tasks first.",
             }
 
-        all_pairs = [(pet, task) for pet in owner.pets for task in pet.tasks if not task.completed]
+        incomplete_pairs = [(pet, task) for pet in owner.pets for task in pet.tasks if not task.completed]
+        all_pairs = [(pet, task) for pet, task in incomplete_pairs if self._is_due(task)]
+        upcoming_pairs = [(pet, task) for pet, task in incomplete_pairs if not self._is_due(task)]
         completed_pairs = [(pet, task) for pet in owner.pets for task in pet.tasks if task.completed]
 
-        if not all_pairs and not completed_pairs:
+        def _upcoming_row(pet, task):
+            from datetime import timedelta
+            period = FREQUENCY_DAYS.get(task.frequency, 1)
+            next_due = (task.last_done + timedelta(days=period)).strftime("%Y-%m-%d") if task.last_done else "unknown"
+            return {
+                "pet": pet.name, "task": task.name,
+                "duration": task.duration, "priority": task.priority,
+                "preferred_slot": task.preferred_slot,
+                "frequency": task.frequency, "next_due": next_due,
+            }
+
+        if not all_pairs and not completed_pairs and not upcoming_pairs:
             pet_names = ", ".join(p.name for p in owner.pets)
             return {
-                "entries": [], "skipped": [], "completed": [],
+                "entries": [], "skipped": [], "completed": [], "upcoming": [],
                 "total_time_scheduled": 0.0, "time_available": owner.time_available_minutes,
                 "completion_ratio": 1.0,
                 "explanation": f"{owner.name} has pets ({pet_names}) but none have tasks. Add tasks first.",
@@ -542,13 +602,14 @@ class Scheduler:
                     }
                     for pet, task in completed_pairs
                 ],
+                "upcoming": [_upcoming_row(pet, task) for pet, task in upcoming_pairs],
                 "total_time_scheduled": 0.0, "time_available": owner.time_available_minutes,
                 "completion_ratio": 1.0,
                 "explanation": f"All tasks for {owner.name}'s pets are already completed.",
             }
 
         # Knapsack selects the best-value subset that fits within the time budget
-        selected = self._knapsack_select(all_pairs, owner.time_available_minutes, current_slot)
+        selected = self._knapsack_select(all_pairs, owner.time_available_minutes, covered_slots)
         selected_names = {task.name for _, task in selected}
         skipped = [
             {
@@ -607,6 +668,10 @@ class Scheduler:
         total_incomplete = len(all_pairs)
         completion_ratio = len(entries) / total_incomplete if total_incomplete > 0 else 1.0
 
+        logger.info(
+            "Schedule created: owner='%s', covered_slots=%s, scheduled=%d, skipped=%d",
+            owner.name, sorted(covered_slots), len(entries), len(skipped),
+        )
         return {
             "entries": entries,
             "skipped": skipped,
@@ -619,11 +684,12 @@ class Scheduler:
                 }
                 for pet, task in completed_pairs
             ],
+            "upcoming": [_upcoming_row(pet, task) for pet, task in upcoming_pairs],
             "total_time_scheduled": time_used,
             "time_available": owner.time_available_minutes,
             "completion_ratio": completion_ratio,
             "explanation": self._build_explanation(
-                owner, entries, skipped, time_used, completion_ratio, current_slot, selected
+                owner, entries, skipped, time_used, completion_ratio, covered_slots, selected
             ),
             "conflicts": self.detect_conflicts(),
         }
