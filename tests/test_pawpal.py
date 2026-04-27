@@ -5,6 +5,14 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pawpal_system import Task, Pet, Owner, Scheduler
+from knowledge_base import retrieve_relevant_chunks
+from ai_advisor import (
+    _parse_json_response,
+    _valid_hhmm,
+    _species_for,
+    _build_schedule_summary,
+    _validate_revised_schedule,
+)
 
 
 # ── Task: properties, validation, lifecycle ───────────────────────────────────
@@ -16,22 +24,15 @@ def test_mark_complete_changes_status():
     assert task.completed is True
 
 
-def test_set_name_rejects_empty_string():
+def test_set_name_rejects_blank():
+    """set_name() raises ValueError for both an empty string and an all-whitespace string."""
     task = Task(name="Feed", duration=10, priority="high")
-    try:
-        task.set_name("")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
-
-
-def test_set_name_rejects_whitespace():
-    task = Task(name="Feed", duration=10, priority="high")
-    try:
-        task.set_name("   ")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
+    for bad in ("", "   "):
+        try:
+            task.set_name(bad)
+            assert False, "Expected ValueError"
+        except ValueError:
+            pass
 
 
 def test_set_duration_zero_raises():
@@ -129,18 +130,15 @@ def test_set_last_done_stores_value():
     assert task.last_done == when
 
 
-def test_urgency_multiplier_no_frequency_returns_zero():
-    """urgency_multiplier() returns 0.0 when frequency is None regardless of last_done."""
-    task = Task(name="Walk", duration=30, priority="high",
-                frequency=None, last_done=datetime.now() - timedelta(days=10))
-    assert task.urgency_multiplier() == 0.0
+def test_urgency_multiplier_returns_zero_cases():
+    """urgency_multiplier() returns 0.0 when frequency is None and when the task is within its period."""
+    no_freq = Task(name="Walk", duration=30, priority="high",
+                   frequency=None, last_done=datetime.now() - timedelta(days=10))
+    assert no_freq.urgency_multiplier() == 0.0
 
-
-def test_urgency_multiplier_on_schedule_returns_zero():
-    """urgency_multiplier() returns 0.0 when task was done within its period."""
-    task = Task(name="Walk", duration=30, priority="high",
-                frequency="weekly", last_done=datetime.now() - timedelta(days=3))
-    assert task.urgency_multiplier() == 0.0
+    on_schedule = Task(name="Walk", duration=30, priority="high",
+                       frequency="weekly", last_done=datetime.now() - timedelta(days=3))
+    assert on_schedule.urgency_multiplier() == 0.0
 
 
 def test_urgency_multiplier_overdue_returns_positive():
@@ -151,11 +149,30 @@ def test_urgency_multiplier_overdue_returns_positive():
 
 
 def test_scheduling_value_slot_bonus_applied():
-    """scheduling_value() returns a strictly higher value when the current slot matches preferred_slot."""
+    """scheduling_value() returns a strictly higher value when the task's preferred_slot is covered."""
     task = Task(name="Feed", duration=10, priority="medium", preferred_slot="morning")
-    value_match = task.scheduling_value(current_slot="morning")
-    value_no_match = task.scheduling_value(current_slot="evening")
+    value_match = task.scheduling_value(covered_slots=frozenset({"morning"}))
+    value_no_match = task.scheduling_value(covered_slots=frozenset({"evening"}))
     assert value_match > value_no_match
+
+
+def test_urgency_multiplier_never_done_returns_zero():
+    """urgency_multiplier() returns 0.0 when frequency is set but last_done is None (task never completed)."""
+    task = Task(name="Walk", duration=30, priority="high", frequency="daily", last_done=None)
+    assert task.urgency_multiplier() == 0.0
+
+
+def test_urgency_multiplier_last_done_in_future_returns_zero():
+    """urgency_multiplier() returns 0.0 when last_done is in the future (task not yet due)."""
+    task = Task(name="Walk", duration=30, priority="high",
+                frequency="daily", last_done=datetime.now() + timedelta(days=1))
+    assert task.urgency_multiplier() == 0.0
+
+
+def test_scheduling_value_no_preferred_slot_no_bonus():
+    """scheduling_value() applies no slot bonus when preferred_slot is None."""
+    task = Task(name="Feed", duration=10, priority="medium", preferred_slot=None)
+    assert task.scheduling_value(covered_slots=frozenset({"morning"})) == 10.0
 
 
 # ── Pet: properties and task management ──────────────────────────────────────
@@ -307,6 +324,15 @@ def test_add_time_window_absorbs_multiple_existing():
     assert owner.time_available == [("07:30", "11:30")]
 
 
+def test_add_time_window_merges_three_sequential_overlapping_windows():
+    """Three windows added in sequence each overlapping the previous merge into a single span."""
+    owner = Owner(name="Alice", time_available=[])
+    owner.add_time_window("09:00", "11:00")
+    owner.add_time_window("10:00", "13:00")
+    owner.add_time_window("12:30", "14:00")
+    assert owner.time_available == [("09:00", "14:00")]
+
+
 def test_owner_remove_time_window_valid():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     owner.remove_time_window("08:00", "09:00")
@@ -455,17 +481,44 @@ def test_same_pet_tasks_grouped_together():
 
 
 def test_slot_matching_task_preferred():
-    """A morning-slot task should be preferred when current_slot='morning'."""
+    """A morning-slot task should be preferred when the owner's windows cover morning."""
     owner = Owner(name="Taylor", time_available=[("08:00", "08:15")])
     pet = Pet(name="Cleo", species="Cat")
     pet.add_task(Task(name="Feed", duration=10, priority="medium", preferred_slot="morning"))
     pet.add_task(Task(name="Play", duration=10, priority="medium"))
     owner.add_pet(pet)
 
-    # Both tasks are 10 min; only one fits in 15 min (or both do — just check Feed is first)
-    entries = Scheduler(owner).create_schedule(current_slot="morning")["entries"]
+    # Owner window is 08:00–08:15 → covered_slots={"morning"}; Feed gets bonus so it wins the slot
+    entries = Scheduler(owner).create_schedule()["entries"]
     names = [e["task"] for e in entries]
     assert names[0] == "Feed"
+
+
+def test_slot_placement_prefers_matching_window():
+    """A task with preferred_slot='afternoon' should be placed in the afternoon window
+    even when a morning window is also available and comes first chronologically."""
+    owner = Owner(name="Sam", time_available=[("08:00", "09:00"), ("13:00", "14:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="medium", preferred_slot="afternoon"))
+    owner.add_pet(pet)
+
+    entries = Scheduler(owner).create_schedule()["entries"]
+    assert len(entries) == 1
+    # Walk should start at 13:00, not 08:00
+    assert entries[0]["time"] == "13:00"
+
+
+def test_slot_placement_falls_back_to_any_window():
+    """A task with preferred_slot='evening' falls back to a morning window when no evening
+    window exists, rather than being dropped."""
+    owner = Owner(name="Sam", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="medium", preferred_slot="evening"))
+    owner.add_pet(pet)
+
+    entries = Scheduler(owner).create_schedule()["entries"]
+    assert len(entries) == 1
+    assert entries[0]["time"] == "08:00"
 
 
 def test_overdue_task_scheduled_over_same_priority_fresh_task():
@@ -532,14 +585,13 @@ def test_create_schedule_no_owner_raises():
         pass
 
 
-def test_create_schedule_rejects_invalid_slot():
-    owner = Owner(name="Sam", time_available=[("08:00", "09:00")])
-    scheduler = Scheduler(owner)
-    try:
-        scheduler.create_schedule(current_slot="night")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
+
+def test_create_schedule_no_pets_returns_empty():
+    """Owner with no pets returns empty entries, no crash, and completion_ratio=1.0."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    schedule = Scheduler(owner).create_schedule()
+    assert schedule["entries"] == []
+    assert schedule["completion_ratio"] == 1.0
 
 
 def test_create_schedule_no_time_windows_all_skipped():
@@ -712,6 +764,48 @@ def test_complete_task_raises_if_already_completed():
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+
+def test_complete_task_raises_if_already_completed_no_frequency():
+    """complete_task() raises ValueError even for a one-time (frequency=None) task that is already done."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    task = Task(name="Checkup", duration=45, priority="low", frequency=None)
+    task.mark_complete()
+    pet.add_task(task)
+    owner.add_pet(pet)
+    try:
+        Scheduler(owner).complete_task("Buddy", "Checkup")
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_complete_task_raises_if_dependency_not_done():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Feed", duration=10, priority="high"))
+    pet.add_task(Task(name="Walk", duration=20, priority="high", depends_on="Feed"))
+    owner.add_pet(pet)
+    try:
+        Scheduler(owner).complete_task("Buddy", "Walk")
+        assert False, "Expected ValueError when prerequisite is incomplete"
+    except ValueError as e:
+        assert "Feed" in str(e)
+
+
+def test_complete_task_allowed_when_dependency_done():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    feed = Task(name="Feed", duration=10, priority="high")
+    feed.mark_complete()
+    pet.add_task(feed)
+    pet.add_task(Task(name="Walk", duration=20, priority="high", depends_on="Feed"))
+    owner.add_pet(pet)
+    scheduler = Scheduler(owner)
+    scheduler.complete_task("Buddy", "Walk")
+    walk = next(t for t in pet.tasks if t.name == "Walk")
+    assert walk.completed
 
 
 def test_complete_task_new_task_inherits_fields():
@@ -930,49 +1024,38 @@ def test_detect_conflicts_no_owner_returns_empty():
 
 # ── Filter tasks ──────────────────────────────────────────────────────────────
 
+def _make_filter_scheduler():
+    """Shared setup: Alice owns Buddy (Dog) and Whiskers (Cat).
+    Buddy has Walk (completed) + Feed (incomplete). Whiskers has Groom (incomplete)."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    buddy = Pet(name="Buddy", species="Dog")
+    walk = Task(name="Walk", duration=30, priority="high")
+    walk.mark_complete()
+    buddy.add_task(walk)
+    buddy.add_task(Task(name="Feed", duration=10, priority="medium"))
+    whiskers = Pet(name="Whiskers", species="Cat")
+    whiskers.add_task(Task(name="Groom", duration=15, priority="low"))
+    owner.add_pet(buddy)
+    owner.add_pet(whiskers)
+    return Scheduler(owner)
+
+
 def test_filter_tasks_completed_true():
     """filter_tasks(completed=True) returns only completed tasks across all pets."""
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    done = Task(name="Walk", duration=30, priority="high")
-    done.mark_complete()
-    pet.add_task(done)
-    pet.add_task(Task(name="Feed", duration=10, priority="medium"))
-    owner.add_pet(pet)
-
-    result = Scheduler(owner).filter_tasks(completed=True)
+    result = _make_filter_scheduler().filter_tasks(completed=True)
     assert len(result) == 1
     assert result[0].name == "Walk"
 
 
 def test_filter_tasks_no_filters_returns_all():
     """filter_tasks() with no arguments returns every task regardless of status or pet."""
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    done = Task(name="Walk", duration=30, priority="high")
-    done.mark_complete()
-    pet.add_task(done)
-    pet.add_task(Task(name="Feed", duration=10, priority="medium"))
-    owner.add_pet(pet)
-
-    result = Scheduler(owner).filter_tasks()
-    assert len(result) == 2
+    result = _make_filter_scheduler().filter_tasks()
+    assert len(result) == 3
 
 
 def test_filter_tasks_combined_completed_and_pet_name():
-    """filter_tasks(completed=False, pet_name='Fido') returns only Fido's incomplete tasks."""
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    fido = Pet(name="Fido", species="Dog")
-    walk = Task(name="Walk", duration=30, priority="high")
-    walk.mark_complete()
-    fido.add_task(walk)
-    fido.add_task(Task(name="Feed", duration=10, priority="medium"))
-    whiskers = Pet(name="Whiskers", species="Cat")
-    whiskers.add_task(Task(name="Groom", duration=15, priority="low"))
-    owner.add_pet(fido)
-    owner.add_pet(whiskers)
-
-    result = Scheduler(owner).filter_tasks(completed=False, pet_name="Fido")
+    """filter_tasks(completed=False, pet_name='Buddy') returns only Buddy's incomplete tasks."""
+    result = _make_filter_scheduler().filter_tasks(completed=False, pet_name="Buddy")
     result_names = [t.name for t in result]
 
     assert result_names == ["Feed"]
@@ -1064,3 +1147,222 @@ def test_sort_by_time_no_owner_raises():
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+
+# ── knowledge_base: retrieval ─────────────────────────────────────────────────
+
+def test_retrieve_dog_exercise_chunk():
+    """An exercise-keyword task for a dog returns the dog_exercise chunk."""
+    result = retrieve_relevant_chunks(["dog"], ["Walk the dog"])
+    keys = [k for k, _ in result]
+    assert "dog_exercise" in keys
+
+
+def test_retrieve_cat_feeding_chunk():
+    """A feeding-keyword task for a cat returns the cat_feeding chunk."""
+    result = retrieve_relevant_chunks(["cat"], ["Feed cat"])
+    keys = [k for k, _ in result]
+    assert "cat_feeding" in keys
+
+
+def test_retrieve_multi_species_includes_general():
+    """Two or more species triggers inclusion of general_scheduling regardless of task keywords."""
+    result = retrieve_relevant_chunks(["dog", "cat"], ["Walk"])
+    keys = [k for k, _ in result]
+    assert "general_scheduling" in keys
+
+
+def test_retrieve_five_tasks_includes_general():
+    """Five or more task names triggers inclusion of general_scheduling."""
+    result = retrieve_relevant_chunks(["dog"], ["t1", "t2", "t3", "t4", "t5"])
+    keys = [k for k, _ in result]
+    assert "general_scheduling" in keys
+
+
+def test_retrieve_fallback_on_unknown_species():
+    """An unrecognised species with no keyword matches falls back to the two general chunks."""
+    result = retrieve_relevant_chunks(["rabbit"], ["unknown task"])
+    keys = [k for k, _ in result]
+    assert keys == ["general_scheduling", "task_prioritization"]
+
+
+def test_retrieve_max_chunks_respected():
+    """max_chunks=1 limits the result to at most one tuple regardless of available candidates."""
+    result = retrieve_relevant_chunks(["dog", "cat"], ["walk", "feed", "groom", "vet"], max_chunks=1)
+    assert len(result) <= 1
+
+
+def test_retrieve_max_chunks_zero_returns_empty():
+    """max_chunks=0 returns an empty list regardless of species or tasks."""
+    result = retrieve_relevant_chunks(["dog"], ["feed"], max_chunks=0)
+    assert result == []
+
+
+# ── ai_advisor: helper utilities ──────────────────────────────────────────────
+
+def test_parse_json_response_valid_json():
+    assert _parse_json_response('{"key": "val"}') == {"key": "val"}
+
+
+def test_parse_json_response_embedded_json():
+    assert _parse_json_response('some text {"a": 1} more text') == {"a": 1}
+
+
+def test_parse_json_response_no_json_raises():
+    try:
+        _parse_json_response("no braces here")
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_parse_json_response_invalid_json_in_braces():
+    """Braces are present but the content is not valid JSON — must raise ValueError."""
+    try:
+        _parse_json_response("{ not valid json }")
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_valid_hhmm_accepts_valid_times():
+    for t in ("08:30", "00:00", "23:59"):
+        assert _valid_hhmm(t) is True, f"Expected {t!r} to be valid"
+
+
+def test_valid_hhmm_rejects_invalid_formats():
+    for t in ("25:00", "12:60", "abc", "12:30:00"):
+        assert _valid_hhmm(t) is False, f"Expected {t!r} to be invalid"
+
+
+def test_valid_hhmm_rejects_non_string():
+    assert _valid_hhmm(830) is False
+
+
+def test_valid_hhmm_rejects_none():
+    assert _valid_hhmm(None) is False
+
+
+def test_valid_hhmm_rejects_empty_string():
+    assert _valid_hhmm("") is False
+
+
+def test_valid_hhmm_accepts_single_digit_hour():
+    """'1:30' is valid — the function uses int() so zero-padding is not required."""
+    assert _valid_hhmm("1:30") is True
+
+
+def test_valid_hhmm_rejects_hour_exactly_24():
+    """'24:00' fails the 0–23 range check even though minutes are valid."""
+    assert _valid_hhmm("24:00") is False
+
+
+def test_species_for_found_pet():
+    owner = Owner(name="Alice", time_available=[])
+    owner.add_pet(Pet(name="Rex", species="dog"))
+    assert _species_for(owner, "Rex") == "dog"
+
+
+def test_species_for_unknown_pet():
+    owner = Owner(name="Alice", time_available=[])
+    assert _species_for(owner, "Ghost") == "unknown"
+
+
+def test_build_schedule_summary_contains_owner_name():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    summary = _build_schedule_summary(owner, {"entries": [], "skipped": []})
+    assert "Alice" in summary
+
+
+def test_validate_revised_schedule_valid_entries_pass():
+    owner = Owner(name="Alice", time_available=[("08:00", "10:00")])
+    owner.add_pet(Pet(name="Buddy", species="dog"))
+    original = {
+        "entries": [
+            {"task": "Walk", "pet": "Buddy", "duration": 30, "priority": "high",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+        ],
+        "skipped": [],
+    }
+    raw = [{"task": "Walk", "pet": "Buddy", "time": "08:00", "priority": "high"}]
+    result = _validate_revised_schedule(owner, original, raw)
+    assert result is not None
+    assert result["entries"][0]["task"] == "Walk"
+
+
+def test_validate_revised_schedule_filters_unknown_task():
+    """An entry whose task name is not in the original schedule is silently dropped."""
+    owner = Owner(name="Alice", time_available=[("08:00", "10:00")])
+    owner.add_pet(Pet(name="Buddy", species="dog"))
+    original = {
+        "entries": [
+            {"task": "Walk", "pet": "Buddy", "duration": 30, "priority": "high",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+        ],
+        "skipped": [],
+    }
+    raw = [
+        {"task": "Ghost Task", "pet": "Buddy", "time": "08:00", "priority": "low"},
+        {"task": "Walk", "pet": "Buddy", "time": "08:30", "priority": "high"},
+    ]
+    result = _validate_revised_schedule(owner, original, raw)
+    assert result is not None
+    task_names = [e["task"] for e in result["entries"]]
+    assert "Walk" in task_names
+    assert "Ghost Task" not in task_names
+
+
+def test_validate_revised_schedule_filters_invalid_time():
+    """An entry with an out-of-range time (fails _valid_hhmm) is dropped."""
+    owner = Owner(name="Alice", time_available=[("08:00", "10:00")])
+    owner.add_pet(Pet(name="Buddy", species="dog"))
+    original = {
+        "entries": [
+            {"task": "Walk", "pet": "Buddy", "duration": 30, "priority": "high",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+            {"task": "Feed", "pet": "Buddy", "duration": 10, "priority": "medium",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+        ],
+        "skipped": [],
+    }
+    raw = [
+        {"task": "Walk", "pet": "Buddy", "time": "25:00", "priority": "high"},
+        {"task": "Feed", "pet": "Buddy", "time": "08:00", "priority": "medium"},
+    ]
+    result = _validate_revised_schedule(owner, original, raw)
+    assert result is not None
+    task_names = [e["task"] for e in result["entries"]]
+    assert "Feed" in task_names
+    assert "Walk" not in task_names
+
+
+def test_validate_revised_schedule_filters_unknown_pet():
+    """Entries referencing a pet not in the owner's list are dropped; returns None when nothing survives."""
+    owner = Owner(name="Alice", time_available=[("08:00", "10:00")])
+    owner.add_pet(Pet(name="Buddy", species="dog"))
+    original = {
+        "entries": [
+            {"task": "Walk", "pet": "Buddy", "duration": 30, "priority": "high",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+        ],
+        "skipped": [],
+    }
+    raw = [{"task": "Walk", "pet": "Ghost", "time": "08:00", "priority": "high"}]
+    result = _validate_revised_schedule(owner, original, raw)
+    assert result is None
+
+
+def test_validate_revised_schedule_returns_none_when_all_filtered():
+    """_validate_revised_schedule returns None when every raw entry fails validation."""
+    owner = Owner(name="Alice", time_available=[("08:00", "10:00")])
+    owner.add_pet(Pet(name="Buddy", species="dog"))
+    original = {
+        "entries": [
+            {"task": "Walk", "pet": "Buddy", "duration": 30, "priority": "high",
+             "frequency": None, "preferred_slot": None, "depends_on": None},
+        ],
+        "skipped": [],
+    }
+    raw = [{"task": "Nonexistent", "pet": "Buddy", "time": "08:00", "priority": "high"}]
+    result = _validate_revised_schedule(owner, original, raw)
+    assert result is None
