@@ -146,6 +146,8 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 
 *The AI advisor was not successfully run end-to-end during development, so no live AI output samples are available. The core scheduler (input → optimized task schedule) functions correctly and can be demonstrated independently.*
 
+<video src="assets/Petwise End-to-End.mp4" controls="controls" style="max-width: 100%;"></video>
+
 ---
 
 ## Design Decisions
