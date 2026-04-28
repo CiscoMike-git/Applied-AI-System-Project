@@ -204,6 +204,21 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "Flight provides the primary cardiovascular exercise for unclipped birds; ensure "
         "windows and mirrors are clearly marked to prevent dangerous collisions."
     ),
+    "bird_grooming": (
+        "Birds preen constantly to maintain feather alignment and waterproofing; monitor preening "
+        "for signs of over-preening or feather-plucking, which signals stress, illness, or "
+        "boredom rather than a routine grooming need. Misting with a spray bottle or providing "
+        "a shallow dish of water lets birds bathe naturally — most enjoy this 2–3 times per week; "
+        "avoid cold water. Wing clipping is optional and debated; if done, it should be performed "
+        "by a vet or experienced groomer, leaving enough feathers for a controlled glide. Nails "
+        "should be trimmed every 2–3 months or when they become hooked and catch on cage bars; "
+        "use bird-specific clippers or have a vet handle it. Beak trimming is almost never needed "
+        "in healthy birds with appropriate perches and foraging toys — an overgrown beak usually "
+        "signals nutritional deficiency or underlying illness. Cuttlebones and mineral blocks "
+        "support beak conditioning. Clean food and water dishes daily; bacteria and mold in dirty "
+        "dishes are a leading cause of disease. Rotate cage liners daily and thoroughly clean the "
+        "cage weekly with a bird-safe disinfectant."
+    ),
     "bird_health": (
         "Birds are prey animals and hide illness until severely compromised — visible symptoms "
         "often mean a veterinary emergency. Establish care with an avian-certified veterinarian "
@@ -228,6 +243,32 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "be available at all times; provide both a bottle and a bowl since individuals prefer "
         "different sources."
     ),
+    "guinea_pig_exercise": (
+        "Guinea pigs need at least 1–2 hours of supervised floor time outside their enclosure "
+        "daily in a guinea-pig-proofed space. Unlike hamsters, guinea pigs should never be "
+        "placed in exercise balls and do not use wheels — both cause injury and acute stress. "
+        "Floor time in a pen with tunnels, hides, and scattered forage opportunities satisfies "
+        "natural instincts. Guinea pigs exercise more actively in pairs or groups; a lone animal "
+        "often moves less and becomes lethargic. Rearranging the enclosure periodically with new "
+        "tunnels and hides maintains novelty and encourages exploration. The enclosure itself "
+        "should be at minimum 10.5 square feet for two guinea pigs — C&C cages or similar large "
+        "enclosures are strongly recommended, as pet-store hutches are almost always undersized. "
+        "Guinea pigs are crepuscular and most active at dawn and dusk; offer enrichment and floor "
+        "time during these windows for best engagement."
+    ),
+    "guinea_pig_grooming": (
+        "Short-haired guinea pigs need brushing 1–2 times per week; during shedding seasons "
+        "brush more frequently to reduce hair ingestion. Long-haired breeds (Peruvian, Silkie) "
+        "require daily combing to prevent painful mats and to keep hair clear of the face and "
+        "genitals. Use a soft-bristle brush and small metal comb. Nails must be trimmed every "
+        "4–6 weeks; overgrown nails curve and can tear or grow into the foot pad. Bathing is "
+        "rarely necessary; when needed, use a guinea-pig-safe shampoo and dry thoroughly — wet, "
+        "cold guinea pigs are susceptible to respiratory infections. Check the anal sac (a small "
+        "pocket near the anus, more prominent in neutered males) for impaction, which requires "
+        "gentle cleaning. Teeth grow continuously; adequate hay prevents most dental problems, "
+        "but watch for drooling, food-dropping, or weight loss as early signs of dental disease. "
+        "Spot-clean droppings and soiled bedding daily; do a full cage clean at least weekly."
+    ),
     "guinea_pig_health": (
         "Guinea pigs are social animals and should ideally be housed with at least one "
         "companion of the same sex; a lone guinea pig requires substantially more owner "
@@ -251,6 +292,33 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "cause wet fur. Provide a ceramic or metal food dish — hamsters chew plastic. "
         "Remove perishable food from the enclosure within 24 hours to prevent spoilage."
     ),
+    "hamster_exercise": (
+        "Hamsters are highly active and can run 5–8 miles per night in the wild — a solid-surface "
+        "wheel is a primary welfare need, not an optional accessory. Wheel sizes must match the "
+        "species: 10–12 inches for Syrian hamsters, 8 inches for Chinese hamsters, and 6.5–8 "
+        "inches for dwarf breeds (Roborovski, Campbell's, Winter White). Wire or mesh wheels "
+        "cause bumblefoot (pododermatitis) and limb injuries; only solid-surface or mesh-free "
+        "wheels (Niteangel, Silent Runner, Wodent Wheel) are acceptable. Provide tunnels, deep "
+        "burrowing substrate (minimum 6 inches), and a sand bath to support natural behaviors. "
+        "Exercise balls are not recommended — they cause disorientation, restrict ventilation, "
+        "and cause stress; supervised free-roam in a hamster-proofed pen is preferable. Hamsters "
+        "are crepuscular to nocturnal; avoid disturbing them during daytime sleep, as disrupted "
+        "sleep cycles cause chronic stress and can shorten their already brief lifespan."
+    ),
+    "hamster_grooming": (
+        "Hamsters are fastidious self-groomers and rarely require human grooming intervention. "
+        "Short-haired hamsters need no routine brushing. Long-haired (Teddy Bear) Syrian hamsters "
+        "may need occasional gentle combing with a soft toothbrush to prevent mats, especially "
+        "around the rear end. Always provide a sand bath (chinchilla sand, not dust) for dwarf "
+        "breeds — they use it naturally to clean their coats; limit sessions to 10–15 minutes "
+        "to prevent dry skin. Never use water baths; hamsters are extremely prone to hypothermia "
+        "and shock from bathing. Scent glands (on the flanks in Syrians, on the abdomen in "
+        "dwarfs) may appear greasy or waxy — this is normal marking behavior, not a grooming "
+        "concern. Check cheek pouches weekly; impacted pouches (food stuck inside) require "
+        "immediate veterinary attention. Spot-clean the enclosure 2–3 times per week by removing "
+        "soiled bedding and uneaten perishables; do a full clean monthly — over-cleaning removes "
+        "scent cues and stresses hamsters, while under-cleaning causes harmful ammonia build-up."
+    ),
     "hamster_health": (
         "Hamsters have a short lifespan of 1.5–3 years (Roborovskis up to 3.5 years), so "
         "health changes can appear and progress rapidly. Wet tail (proliferative ileitis) is a "
@@ -260,15 +328,17 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "symptoms include excessive thirst and urination, weight loss despite normal eating, "
         "and lethargy. Tumors are common in older hamsters, especially Syrian females. The "
         "enclosure should provide at least 450 square inches of unbroken floor space — smaller "
-        "cages cause stereotypic bar-chewing and chronic stress. A solid-surface wheel 8–10 "
-        "inches in diameter for Syrians (6 inches for dwarfs) is essential nightly exercise; "
+        "cages cause stereotypic bar-chewing and chronic stress. A solid-surface wheel 10–12 "
+        "inches in diameter for Syrians (6.5–8 inches for dwarfs) is essential nightly exercise; "
         "wire or mesh wheels cause foot and leg injuries."
     ),
     "reptile_feeding": (
         "Reptile feeding requirements vary significantly by species and must be researched "
         "specifically for the animal in your care. Insectivores (leopard geckos, young bearded "
-        "dragons, crested geckos) require gut-loaded live or frozen-thawed insects dusted with "
-        "calcium and D3 supplements 2–5 times weekly. Herbivores and omnivores (adult bearded "
+        "dragons) require gut-loaded live or frozen-thawed insects dusted with calcium and D3 "
+        "supplements 2–5 times weekly. Omnivores like crested geckos thrive on a commercial "
+        "fruit-based crested gecko diet (CGD) as their staple, supplemented with occasional "
+        "insects; do not treat them as primarily insectivorous. Herbivores and omnivores (adult bearded "
         "dragons, iguanas, tortoises) need dark leafy greens and squash; dandelion greens, "
         "collard greens, and mustard greens are excellent staples. Carnivores (ball pythons, "
         "corn snakes) eat pre-killed or frozen-thawed rodents sized to the snake's girth — "
@@ -277,15 +347,43 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "without D3 for those with proper UVB lighting) is essential to prevent metabolic bone "
         "disease."
     ),
+    "reptile_exercise": (
+        "Reptile activity varies greatly by species but all benefit from enclosures large enough "
+        "to allow natural movement and behavioral expression. Arboreal species (chameleons, green "
+        "tree pythons, crested geckos) need vertical space with climbing branches and foliage; "
+        "inadequate climbing structures cause muscle atrophy and chronic stress. Terrestrial "
+        "species (leopard geckos, ball pythons) need floor space, multiple hides, and objects to "
+        "explore. Bearded dragons benefit from regular supervised exploration outside the "
+        "enclosure in a warm, safe area — they are naturally active and curious when healthy. "
+        "Temperature gradients encourage physical movement as reptiles thermoregulate by shifting "
+        "between warm and cool zones. UVB-driven circadian rhythms influence activity; inadequate "
+        "photoperiods cause lethargy and appetite suppression. Enrichment items — varied substrate "
+        "textures, cork rounds, live-safe plants, and additional hides — encourage exploration and "
+        "reduce stress behaviors like glass surfing or excessive, abnormal hiding."
+    ),
+    "reptile_grooming": (
+        "Reptiles shed their skin periodically (ecdysis) — healthy sheds come off in large pieces "
+        "and snakes should shed in one complete piece. Retained shed (dysecdysis) indicates "
+        "incorrect humidity, dehydration, or illness; soak the animal in lukewarm water for "
+        "15–20 minutes to loosen it and allow natural removal. Never force-pull retained shed as "
+        "it tears live tissue. Providing a humid hide (a hide with damp sphagnum moss inside) "
+        "supports successful shedding. Check for retained eye caps (spectacles) after each snake "
+        "shed — retained caps require professional or careful removal with a moist cotton swab. "
+        "Claw trimming is needed every 4–8 weeks for active lizard species like bearded dragons "
+        "and iguanas, but is not typically required for snakes. Enclosure cleaning frequency "
+        "depends on the substrate type: bioactive setups need spot-cleaning only; paper or tile "
+        "substrates may need full replacement weekly. Disinfect with reptile-safe products "
+        "(diluted F10 or similar) — bleach residue is toxic to reptiles."
+    ),
     "reptile_health": (
         "Reptiles require highly species-specific husbandry — research each species' exact "
         "temperature gradient, humidity, UVB requirements, and enclosure size before "
         "acquisition. Metabolic Bone Disease (MBD), caused by insufficient calcium or "
-        "UVB-B lighting, is one of the most common preventable illnesses; symptoms include "
+        "UVB lighting, is one of the most common preventable illnesses; symptoms include "
         "soft or curved bones, difficulty walking, and jaw deformity. UVB bulbs degrade before "
         "they visibly dim — replace every 6–12 months. Respiratory infections are common when "
         "humidity or temperature is incorrect. Cryptosporidiosis is a serious, sometimes "
-        "incurable parasite; quarantine all new reptiles for 90 days. Annual fecal exams by a "
+        "incurable parasitic disease; quarantine all new reptiles for 90 days. Annual fecal exams by a "
         "reptile-experienced veterinarian are recommended. Signs of illness include wheezing, "
         "mucus around the mouth or nostrils, prolonged refusal to eat, rapid weight loss, and "
         "discharge from the eyes."
@@ -302,6 +400,33 @@ KNOWLEDGE_BASE: dict[str, str] = {
         "reducing waste production. Consider automatic feeders to maintain consistent timing "
         "during travel or irregular schedules."
     ),
+    "fish_exercise": (
+        "Fish health and behavior depend on adequate swimming space and environmental complexity. "
+        "Crowded tanks suppress immune function, increase aggression, and cause chronic stress — "
+        "research minimum tank sizes per species, as many commonly sold fish (goldfish, oscar "
+        "cichlids) require far more space than pet stores suggest. Provide current flow suited to "
+        "the species: rheophilic fish (hillstream loaches, danios) need moderate-to-strong "
+        "circulation; slow-water species (bettas, discus) need calmer zones. Enrich the tank with "
+        "live or silk plants, caves, driftwood, and varied substrate to give fish territories, "
+        "hiding spots, and visual boundaries that reduce aggression. Schooling species (tetras, "
+        "danios, corydoras) require groups of 6 or more to feel secure and display natural "
+        "behavior; solitary schooling fish are chronically stressed. Monitor swimming patterns "
+        "during regular observation — erratic movement, bottom-sitting, surface gasping, or "
+        "clamped fins all indicate problems requiring prompt investigation."
+    ),
+    "fish_grooming": (
+        "Aquarium maintenance directly determines fish health. Perform 25–30% water changes "
+        "weekly using a gravel vacuum to remove detritus and reduce nitrate accumulation. Clean "
+        "algae from the glass with an aquarium scraper or magnetic cleaner — some algae is "
+        "beneficial but excess reduces light and oxygen. Rinse filter media monthly in removed "
+        "tank water, never tap water, to clear debris while preserving the beneficial bacterial "
+        "colony; never replace all filter media at once. Replace degraded mechanical media "
+        "(sponge, floss) as needed, but not during the same session as biological media changes. "
+        "Clean decorations with a dedicated aquarium brush and avoid all soap or household "
+        "cleaners — residue is lethal to fish. Test water parameters after each maintenance "
+        "session to confirm stability. A consistent weekly maintenance schedule prevents the "
+        "parameter swings that stress fish and trigger disease outbreaks."
+    ),
     "fish_health": (
         "Fish health is directly tied to water quality. Test water parameters weekly: ammonia "
         "and nitrite should be 0 ppm; nitrate below 20 ppm for most species; pH appropriate "
@@ -316,10 +441,10 @@ KNOWLEDGE_BASE: dict[str, str] = {
     ),
 }
 
-_EXERCISE_KEYWORDS = {"walk", "exercise", "run", "jog", "hike", "play", "fetch", "agility", "sport", "roam", "free-roam", "forage", "enrichment", "perch", "fly", "flight"}
-_FEEDING_KEYWORDS = {"feed", "food", "meal", "breakfast", "dinner", "lunch", "treat", "water", "eating", "pellet", "hay", "insect", "cricket", "worm", "mouse", "rat", "seed", "flake"}
-_GROOMING_KEYWORDS = {"brush", "groom", "bath", "bathe", "trim", "nail", "coat", "fur", "shampoo", "comb", "cage", "tank", "bedding", "litter", "clean"}
-_HEALTH_KEYWORDS = {"vet", "vaccine", "medicine", "medication", "health", "checkup", "doctor", "pill", "shot", "insulin", "wound", "flea", "tick", "heartworm", "parasite", "mite", "calcium", "uvb", "vitamin"}
+_EXERCISE_KEYWORDS = {"walk", "walking", "exercise", "run", "jog", "hike", "play", "playing", "fetch", "agility", "sport", "roam", "free-roam", "forage", "enrichment", "perch", "fly", "flight", "wheel", "tunnel", "burrow", "climb", "training", "scratch"}
+_FEEDING_KEYWORDS = {"feed", "feeding", "food", "meal", "breakfast", "dinner", "lunch", "treat", "water", "eating", "pellet", "hay", "insect", "cricket", "worm", "mouse", "rat", "seed", "flake", "vegetable", "veggie", "greens", "fruit", "supplement", "prey", "rodent", "wafer", "bloodworm", "kibble"}
+_GROOMING_KEYWORDS = {"brush", "groom", "grooming", "bath", "bathe", "trim", "nail", "coat", "fur", "shampoo", "comb", "cage", "tank", "bedding", "litter", "clean", "teeth", "dental", "ear", "shed", "shedding", "beak", "wing", "preen", "mist", "filter", "gravel", "algae"}
+_HEALTH_KEYWORDS = {"vet", "vaccine", "medicine", "medication", "health", "checkup", "doctor", "pill", "shot", "insulin", "wound", "flea", "tick", "heartworm", "parasite", "mite", "calcium", "uvb", "vitamin", "spay", "neuter", "respiratory", "urinary", "quarantine", "stasis", "booster", "dewormer"}
 
 # Maps selectbox values to knowledge base key prefixes (handles multi-word species names)
 _SPECIES_KEY_MAP: dict[str, str] = {
@@ -333,9 +458,20 @@ def retrieve_relevant_chunks(
     max_chunks: int = 4,
 ) -> list[tuple[str, str]]:
     """Return (chunk_key, chunk_text) tuples most relevant to the given species and tasks."""
-    candidates: list[str] = []
     normalized_species = [s.lower().strip() for s in species_list]
-    task_words = {w.lower() for name in task_names for w in name.split()}
+    task_words = {
+        stripped
+        for name in task_names
+        for w in name.split()
+        if (stripped := w.lower().strip(".,!?;:'\"()[]"))
+    }
+
+    # Scheduling entries are most relevant for multi-pet or complex schedules; prepend them
+    # so they are never pushed out of the max_chunks budget by species-specific candidates.
+    candidates: list[str] = []
+    if len(species_list) >= 2 or len(task_names) >= 5:
+        candidates.append("general_scheduling")
+        candidates.append("task_prioritization")
 
     for species in normalized_species:
         species_key = _SPECIES_KEY_MAP.get(species, species)
@@ -347,10 +483,6 @@ def retrieve_relevant_chunks(
             candidates.append(f"{species_key}_grooming")
         if task_words & _HEALTH_KEYWORDS:
             candidates.append(f"{species_key}_health")
-
-    if len(species_list) >= 2 or len(task_names) >= 5:
-        candidates.append("general_scheduling")
-        candidates.append("task_prioritization")
 
     seen: set[str] = set()
     unique: list[str] = []
