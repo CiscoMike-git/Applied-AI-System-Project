@@ -149,7 +149,12 @@ owner_name = st.text_input("Owner Name", value="Jordan").title()
 if "owner" not in st.session_state:
     st.session_state.owner = Owner(name=owner_name)
 else:
-    st.session_state.owner.name = owner_name  # sync if text input changed
+    if st.session_state.owner.name != owner_name:
+        st.session_state.owner.name = owner_name
+        st.session_state.pop("last_schedule", None)
+        st.session_state.pop("last_advice", None)
+    else:
+        st.session_state.owner.name = owner_name
 
 if st.session_state.owner.time_available:
     st.markdown("**Available Time Windows**")
@@ -209,6 +214,8 @@ with col_add_w:
     if st.button("Add Window"):
         try:
             st.session_state.owner.add_time_window(win_start, win_end)
+            st.session_state.pop("last_schedule", None)
+            st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -216,6 +223,8 @@ with col_rem_w:
     if st.button("Remove Window"):
         try:
             st.session_state.owner.remove_time_window(win_start, win_end)
+            st.session_state.pop("last_schedule", None)
+            st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -241,6 +250,8 @@ with col_add:
     if st.button("Add Pet"):
         try:
             st.session_state.owner.add_pet(Pet(name=pet_name, species=species.lower()))
+            st.session_state.pop("last_schedule", None)
+            st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -248,6 +259,8 @@ with col_rem:
     if st.button("Remove Pet"):
         try:
             st.session_state.owner.remove_pet(pet_name)
+            st.session_state.pop("last_schedule", None)
+            st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -316,6 +329,8 @@ if pet_names:
                 preferred_slot=preferred_slot,
                 depends_on=depends_on,
             ))
+            st.session_state.pop("last_schedule", None)
+            st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
             st.error(str(e))
@@ -342,6 +357,8 @@ if pet_names:
                     scheduler = Scheduler(owner=st.session_state.owner)
                     scheduler.complete_task(selected_pet_name, task_to_complete)
                     st.success(f"'{task_to_complete}' marked as completed.")
+                    st.session_state.pop("last_schedule", None)
+                    st.session_state.pop("last_advice", None)
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -372,7 +389,9 @@ if st.button("Generate Schedule"):
         schedule = Scheduler(owner=st.session_state.owner).create_schedule()
         st.session_state["last_schedule"] = schedule
         st.session_state.pop("last_advice", None)
-        _render_schedule(schedule, st.session_state.owner)
+
+if "last_schedule" in st.session_state:
+    _render_schedule(st.session_state["last_schedule"], st.session_state.owner)
 
 
 # ---------------------------------------------------------------------------
