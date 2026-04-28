@@ -1,26 +1,36 @@
 import json
 import logging
 import os
+import time
 
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 from google.api_core import retry as google_retry
 
+def _is_retryable_quota_error(exc):
+    if not isinstance(exc, google_exceptions.ResourceExhausted):
+        return False
+    # Only retry per-minute limits (reset in ~60s) — all other quota dimensions won't resolve within the session
+    exc_str = str(exc)
+    return "PerMinute" in exc_str or "per_minute" in exc_str
+
 _gemini_retry = google_retry.Retry(
-    predicate=google_retry.if_exception_type(google_exceptions.ResourceExhausted),
-    initial=40.0,
-    maximum=60.0,
-    multiplier=2.0,
-    deadline=120.0,
+    predicate=_is_retryable_quota_error,
+    initial=65.0,
+    maximum=120.0,
+    multiplier=1.5,
+    deadline=300.0,
 )
 
 from knowledge_base import retrieve_relevant_chunks
 
 logger = logging.getLogger("petwise.ai_advisor")
 
-MODEL = "gemini-2.0-flash-lite"
+MODEL = "gemini-2.5-flash-lite"
 MAX_INPUT_CHARS = 2000
-MAX_TOKENS = 1024
+MAX_KNOWLEDGE_CHARS = 3000
+MAX_TOKENS_ADVICE = 600    # calls 1 & 2: short JSON (recommendations, critique)
+MAX_TOKENS_SCHEDULE = 900  # call 3: JSON array of all scheduled tasks
 
 _EMPTY_RESULT: dict = {
     "recommendation": "",
@@ -32,6 +42,22 @@ _EMPTY_RESULT: dict = {
     "sources_used": [],
     "error": None,
 }
+
+
+def _retrying_send(chat, message: str, generation_config=None):
+    """Send a chat message with retry, restoring history before each attempt.
+
+    Prevents the chat history from accumulating duplicate user turns when the
+    SDK appends the outgoing message to _history before the API call returns.
+    generation_config overrides the model-level config for this call only.
+    """
+    snapshot = list(chat.history)
+
+    def _attempt():
+        chat._history = list(snapshot)  # private attr; stable across current SDK versions
+        return chat.send_message(message, generation_config=generation_config)
+
+    return _gemini_retry(_attempt)()
 
 
 def _parse_json_response(text: str) -> dict:
@@ -145,9 +171,7 @@ def _validate_revised_schedule(owner, original_schedule: dict, raw_entries: list
     total = sum(e["duration"] for e in validated)
     if total > time_available:
         rank = {"high": 0, "medium": 1, "low": 2}
-        # Sort a copy worst-first so we drop from that end
-        drop_order = sorted(validated, key=lambda e: (-rank[e["priority"]], e["time"]), reverse=False)
-        drop_order.reverse()  # lowest priority / latest time first
+        drop_order = sorted(validated, key=lambda e: (rank[e["priority"]], e["time"]), reverse=True)
         while total > time_available and drop_order:
             dropped = drop_order.pop(0)
             total -= dropped["duration"]
@@ -237,7 +261,7 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
         result["sources_used"] = sources_used
         logger.info("RAG retrieved %d chunks: %s", len(chunks), sources_used)
 
-        knowledge_text = "\n\n".join(f"[{key}]\n{text}" for key, text in chunks)
+        knowledge_text = "\n\n".join(f"[{key}]\n{text}" for key, text in chunks)[:MAX_KNOWLEDGE_CHARS]
 
         system_instruction = (
             "You are Petwise, a knowledgeable and practical pet care advisor. "
@@ -251,7 +275,14 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
         model = genai.GenerativeModel(
             model_name=MODEL,
             system_instruction=system_instruction,
-            generation_config=genai.GenerationConfig(max_output_tokens=MAX_TOKENS),
+        )
+        _cfg_advice = genai.GenerationConfig(
+            max_output_tokens=MAX_TOKENS_ADVICE,
+            response_mime_type="application/json",
+        )
+        _cfg_schedule = genai.GenerationConfig(
+            max_output_tokens=MAX_TOKENS_SCHEDULE,
+            response_mime_type="application/json",
         )
 
         schedule_summary = _build_schedule_summary(owner, schedule)
@@ -276,7 +307,7 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
 
         chat = model.start_chat()
         _update("Analyzing your pet care schedule...")
-        response1 = _gemini_retry(chat.send_message)(user_message_1)
+        response1 = _retrying_send(chat, user_message_1, _cfg_advice)
         raw1 = response1.text
         logger.debug("First API response: %s", raw1[:200])
 
@@ -287,7 +318,10 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
         result["concerns"] = initial_advice.get("concerns", [])
         if not isinstance(result["concerns"], list):
             result["concerns"] = [str(result["concerns"])]
-        result["confidence"] = int(initial_advice.get("confidence", 0))
+        try:
+            result["confidence"] = int(float(initial_advice.get("confidence") or 0))
+        except (TypeError, ValueError):
+            result["confidence"] = 0
 
         critique_message = (
             f"You just gave this advice about the pet schedule:\n\n"
@@ -303,8 +337,9 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
             '{"critique": "...", "revised_recommendation": "...", "adjusted_confidence": 80}'
         )
 
+        time.sleep(3)
         _update("Reviewing and critiquing initial advice...")
-        response2 = _gemini_retry(chat.send_message)(critique_message)
+        response2 = _retrying_send(chat, critique_message, _cfg_advice)
         raw2 = response2.text
         logger.debug("Self-critique response: %s", raw2[:200])
 
@@ -315,15 +350,23 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
 
         result["self_critique"] = str(critique_data.get("critique", ""))
         result["final_recommendation"] = str(critique_data.get("revised_recommendation", ""))
-        result["confidence"] = int(critique_data.get("adjusted_confidence", result["confidence"]))
+        try:
+            result["confidence"] = int(float(critique_data.get("adjusted_confidence") or result["confidence"]))
+        except (TypeError, ValueError):
+            pass  # keep confidence from call 1
 
         # Third turn: ask Gemini to produce a revised schedule in structured JSON
         all_tasks = schedule.get("entries", []) + schedule.get("skipped", [])
+        if not all_tasks:
+            logger.warning("No tasks available for revised schedule — skipping third API call")
+            result["revised_schedule"] = None
+            logger.info("AI advice request finished successfully")
+            return result
         task_pool_str = "\n".join(
             f"  - {t['task']} | pet: {t['pet']} | {int(t['duration'])} min | {t['priority']} priority"
             for t in all_tasks
         )
-        windows_str = ", ".join(f"{s}–{e}" for s, e in owner.time_available)
+        windows_str = ", ".join(f"{s}-{e}" for s, e in owner.time_available)
 
         revised_schedule_message = (
             "Now produce a revised pet care schedule based on your recommendations and critique.\n\n"
@@ -340,8 +383,9 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
             '"skipped": [{"task": "Task Name", "pet": "Pet Name", "duration": 5, "priority": "low"}]}'
         )
 
+        time.sleep(3)
         _update("Building your revised schedule...")
-        response3 = _gemini_retry(chat.send_message)(revised_schedule_message)
+        response3 = _retrying_send(chat, revised_schedule_message, _cfg_schedule)
         raw3 = response3.text
         logger.debug("Revised schedule response: %s", raw3[:200])
 
@@ -365,9 +409,14 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
     except google_exceptions.Unauthenticated:
         logger.error("Invalid or missing GOOGLE_API_KEY")
         result["error"] = "API key is invalid or missing. Check the GOOGLE_API_KEY environment variable."
-    except google_exceptions.ResourceExhausted:
-        logger.warning("Rate limit hit in get_ai_advice")
-        result["error"] = "Rate limit reached. Please wait a moment and try again."
+    except google_exceptions.ResourceExhausted as e:
+        exc_str = str(e)
+        if "PerDay" in exc_str or "per_day" in exc_str:
+            logger.warning("Daily API quota exhausted")
+            result["error"] = "Daily API quota exhausted. The free tier limit has been reached for today — please try again tomorrow."
+        else:
+            logger.warning("Rate limit hit in get_ai_advice")
+            result["error"] = "Rate limit reached. Please wait a moment and try again."
     except google_exceptions.ServiceUnavailable:
         logger.error("Network error connecting to Google AI API")
         result["error"] = "Network error. Check your internet connection and try again."
@@ -375,7 +424,8 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
         logger.error("Google API error: %s", e)
         result["error"] = f"API error: {e}. Please try again."
     except (json.JSONDecodeError, ValueError) as e:
-        logger.error("Failed to parse Gemini response: %s", e)
+        _raw_for_log = locals().get("raw3") or locals().get("raw2") or locals().get("raw1")
+        logger.error("Failed to parse Gemini response: %s | raw text: %r", e, _raw_for_log)
         result["error"] = "Could not parse the AI response. Please try again."
     except Exception:
         logger.exception("Unexpected error in get_ai_advice")
