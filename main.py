@@ -1,4 +1,4 @@
-from pawpal_system import Owner, Pet, Task, Scheduler
+from petwise_system import Owner, Pet, Task, Scheduler
 
 # --- Build pets and tasks ---
 # Hard-coded times are omitted — create_schedule() assigns start times from the owner's windows.

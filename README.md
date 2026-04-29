@@ -144,7 +144,15 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 
 ## Sample Interactions
 
-*TODO*
+### Many Tasks One Pet
+
+![Petwise End-to-End Many Tasks One Pet](assets/Petwise%20End-to-End%20Many%20Tasks%201%20Pet.mp4)
+<video src="assets\Petwise End-to-End Many Tasks 1 Pet.mp4" controls="controls" style="max-width: 100%;"></video>
+
+### Some Tasks Many Pets
+
+![Petwise End-to-End Some Tasks Many Pets](assets/Petwise%20End-to-End%20Some%20Tasks%20Many%20Pets.mp4)
+<video src="assets\Petwise End-to-End Some Tasks Many Pets.mp4" controls="controls" style="max-width: 100%;"></video>
 
 ---
 
@@ -200,6 +208,8 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 - *Notify users of dependency cycles:* The topological sort silently falls back to the original task order when a cycle is detected. Surfacing a warning in the UI would make this behavior visible rather than invisible to the user.
 - *Replace keyword matching with embedding-based retrieval:* The current RAG retrieval is sensitive to exact task name phrasing. Switching to vector embeddings would make retrieval more robust to paraphrasing and improve chunk relevance for edge cases.
 - *Add multi-model agreement:* A second model pass or a separate evaluator model could cross-check the AI advisor's revised schedule against the original, flagging large deviations for the user to review rather than accepting the revision silently.
+- *cybersecurity* TODO add context here and change heading
+- *make knowledge base dynamic and auto-updating* TODO add context here and change heading
 
 **Collaboration with AI during this project**
 
@@ -213,7 +223,7 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 - **Self-critique grounding:** The Turn 2 self-critique message was designed with AI to include four specific grounding questions intended to produce schedule-specific, actionable critiques rather than generic outputs.
 
 *Debugging*
-- **Time input normalization:** Time windows only accepted `HH:MM` — AI helped build `_normalize_time_input` to handle digit-only strings, 12-hour am/pm formats, and out-of-range values via modulo. Working with AI, Streamlit's restriction on writing session state post-render was resolved by switching to an `on_change` callback (which also fixed a bypass edge case), and two separate callbacks were later collapsed into one using `args=`.
+- **Time input normalization:** Time windows only accepted `HH:MM` — AI helped build `_normalize_time_input` to handle digit-only strings and 12-hour AM/PM formats, reformatting input to zero-padded `HH:MM`; out-of-range values are rejected by the downstream `_validate_window` validator. Working with AI, Streamlit's restriction on writing session state post-render was resolved by switching to an `on_change` callback (which also fixed a bypass edge case), and two separate callbacks were later collapsed into one using `args=`.
 - **Dependency enforcement:** `Scheduler.complete_task()` had no guard against completing a task before its prerequisite. Working with AI, a pre-check raising a `ValueError` was added and surfaced through the existing `st.error()` handler, and two unit tests were written to confirm the block and its resolution.
 - **Rate limiting & API reliability:** AI identified rate limiting as a structural risk for a 3-turn API flow and proposed exponential backoff via `google.api_core.retry.Retry` alongside a `status_callback` to surface live step progress via `st.status`. A follow-up pass refined the retry predicate to distinguish per-minute quota errors (retriable) from daily exhaustion (non-retriable), introduced `_retrying_send()` to prevent duplicate turns from accumulating in chat history across retries, and upgraded the model to `gemini-2.5-flash-lite` with per-call token limits and `response_mime_type="application/json"` for reliable structured output.
 - **Conflict detection & recurring tasks:** Completed tasks retained stale `time` values from prior runs, causing false conflict warnings — working with AI, this was fixed by adding `not task.completed` to the `detect_conflicts()` filter. Separately, testing revealed that completing a recurring task immediately re-scheduled its new instance in the same session; AI helped patch the issue with a `_is_due()` guard to exclude recently completed tasks, and upcoming instances were moved to a distinct "Coming Up" section.

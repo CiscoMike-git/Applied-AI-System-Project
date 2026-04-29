@@ -7,7 +7,7 @@ load_dotenv()
 
 import streamlit as st
 import pandas as pd
-from pawpal_system import Task, Pet, Owner, Scheduler
+from petwise_system import Task, Pet, Owner, Scheduler
 from ai_advisor import get_ai_advice
 
 
