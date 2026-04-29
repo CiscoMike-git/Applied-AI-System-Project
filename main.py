@@ -18,8 +18,8 @@ whiskers.add_task(Task(name="Morning Groom",    duration=20, priority="medium", 
 
 # --- Mark some tasks as already completed ---
 
-buddy.tasks[0].mark_complete()   # Morning Walk
-buddy.tasks[1].mark_complete()   # Feed Breakfast
+buddy.tasks[0].toggle_complete()   # Morning Walk
+buddy.tasks[1].toggle_complete()   # Feed Breakfast
 
 # --- Build owner (two non-consecutive windows) ---
 

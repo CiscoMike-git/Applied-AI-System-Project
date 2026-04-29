@@ -26,9 +26,15 @@ class Task:
     preferred_slot: Optional[str] = None
     time: Optional[str] = None  # "HH:MM" format
 
-    def mark_complete(self) -> None:
-        """Mark this task as completed."""
-        self.completed = True
+    def toggle_complete(self) -> None:
+        """Toggle task completion. Completing sets completed=True; un-completing sets it False
+        and clears last_done for recurring tasks so they become immediately due again."""
+        if self.completed:
+            self.completed = False
+            if self.frequency is not None:
+                self.last_done = None
+        else:
+            self.completed = True
 
     def set_name(self, name: str) -> None:
         """Set the task name, raising ValueError if empty or whitespace."""
@@ -104,8 +110,32 @@ class Pet:
         self.species = species
 
     def add_task(self, task: Task) -> None:
-        """Add a task to this pet, raising ValueError if a task with the same name already exists."""
-        if any(t.name == task.name for t in self.tasks):
+        """Add a task to this pet.
+
+        Raises ValueError if a task with the same name already exists, UNLESS:
+        - Case A: both tasks have different non-None preferred_slot values, OR
+        - Case B: the tasks have different priority values and all other attributes
+          (duration, frequency, preferred_slot, depends_on) are identical.
+        """
+        for existing in self.tasks:
+            if existing.name != task.name:
+                continue
+            # Case A: different non-None slots
+            if (
+                task.preferred_slot is not None
+                and existing.preferred_slot is not None
+                and task.preferred_slot != existing.preferred_slot
+            ):
+                continue
+            # Case B: different priority, all other fields identical
+            if (
+                task.priority != existing.priority
+                and task.duration == existing.duration
+                and task.frequency == existing.frequency
+                and task.preferred_slot == existing.preferred_slot
+                and task.depends_on == existing.depends_on
+            ):
+                continue
             raise ValueError(f"Task '{task.name}' already exists for this pet.")
         self.tasks.append(task)
 
@@ -481,11 +511,19 @@ class Scheduler:
                     )
         return warnings
 
-    def complete_task(self, pet_name: str, task_name: str) -> Optional[Task]:
-        """Mark a task complete and create the next occurrence for daily/weekly/monthly tasks.
+    def complete_task(self, pet_name: str, task_name: str) -> None:
+        """Toggle a task's completion state.
 
-        Returns the newly created Task if frequency is 'daily', 'weekly', or 'monthly', else None.
-        Raises ValueError if the pet or task is not found, or the task is already completed.
+        Completing (incomplete → complete):
+          - Enforces depends_on: raises ValueError if the prerequisite is not done.
+          - Sets task.completed = True and task.last_done = datetime.now().
+          - Does NOT create a new task instance for recurring tasks.
+
+        Un-completing (complete → incomplete):
+          - No dependency check.
+          - Sets task.completed = False; clears last_done for recurring tasks.
+
+        Raises ValueError if the pet or task is not found.
         """
         if self.owner is None:
             raise ValueError("Cannot complete task: no owner assigned.")
@@ -498,49 +536,46 @@ class Scheduler:
         if task is None:
             raise ValueError(f"Task '{task_name}' not found for pet '{pet_name}'.")
 
-        if task.completed:
-            raise ValueError(f"Task '{task_name}' is already completed.")
+        if not task.completed:
+            if task.depends_on:
+                prereq = next((t for t in pet.tasks if t.name == task.depends_on), None)
+                if prereq is not None and not prereq.completed:
+                    raise ValueError(
+                        f"Cannot complete '{task_name}': '{task.depends_on}' must be completed first."
+                    )
+            task.toggle_complete()
+            task.last_done = datetime.now()
+            logger.info("Task completed: pet='%s', task='%s'", pet_name, task_name)
+        else:
+            task.toggle_complete()
+            logger.info("Task un-completed: pet='%s', task='%s'", pet_name, task_name)
+        return None
 
-        if task.depends_on:
-            prereq = next((t for t in pet.tasks if t.name == task.depends_on), None)
-            if prereq is not None and not prereq.completed:
-                raise ValueError(
-                    f"Cannot complete '{task_name}': '{task.depends_on}' must be completed first."
-                )
+    def reset_due_recurring_tasks(self) -> int:
+        """Reset completed recurring tasks whose next due date has arrived.
 
-        task.mark_complete()
-
-        if task.frequency not in ("daily", "weekly", "monthly"):
-            return None
-
-        # Build a unique name for the next occurrence (e.g. "Walk #2", "Walk #3", ...)
-        # Strip any existing " #N" suffix to get the canonical base name.
-        existing_names = {t.name for t in pet.tasks}
-        parts = task_name.rsplit(" #", 1)
-        base = parts[0] if len(parts) == 2 and parts[1].isdigit() else task_name
-        counter = 2
-        candidate = f"{base} #{counter}"
-        while candidate in existing_names:
-            counter += 1
-            candidate = f"{base} #{counter}"
-
-        next_task = Task(
-            name=candidate,
-            duration=task.duration,
-            priority=task.priority,
-            completed=False,
-            depends_on=task.depends_on,
-            frequency=task.frequency,
-            last_done=datetime.now(),
-            preferred_slot=task.preferred_slot,
-            time=None,
-        )
-        pet.add_task(next_task)
-        logger.info(
-            "Task completed: pet='%s', task='%s', next_occurrence='%s'",
-            pet_name, task_name, next_task.name,
-        )
-        return next_task
+        For each recurring task where completed=True and days since last_done >= frequency period,
+        sets completed=False. last_done is preserved so urgency scoring remains accurate.
+        Returns the count of tasks reset.
+        """
+        if self.owner is None:
+            return 0
+        count = 0
+        for pet in self.owner.pets:
+            for task in pet.tasks:
+                if (
+                    task.frequency is not None
+                    and task.completed
+                    and task.last_done is not None
+                    and (datetime.now() - task.last_done).days >= FREQUENCY_DAYS[task.frequency]
+                ):
+                    task.completed = False
+                    count += 1
+                    logger.info(
+                        "Recurring task reset to incomplete (due): pet='%s', task='%s'",
+                        pet.name, task.name,
+                    )
+        return count
 
     def create_schedule(self) -> dict:
         """Build and return a prioritised schedule of pet tasks within the owner's available time.
@@ -555,6 +590,7 @@ class Scheduler:
             raise ValueError("Cannot create schedule: no owner assigned.")
 
         owner = self.owner
+        self.reset_due_recurring_tasks()
         covered_slots = owner.covered_slots
 
         if not owner.pets:

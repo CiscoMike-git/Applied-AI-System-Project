@@ -17,11 +17,32 @@ from ai_advisor import (
 
 # ── Task: properties, validation, lifecycle ───────────────────────────────────
 
-def test_mark_complete_changes_status():
+def test_toggle_complete_sets_then_clears():
     task = Task(name="Feed", duration=10, priority="high")
     assert task.completed is False
-    task.mark_complete()
+    task.toggle_complete()
     assert task.completed is True
+    task.toggle_complete()
+    assert task.completed is False
+
+
+def test_toggle_complete_back_clears_last_done_for_recurring():
+    task = Task(name="Walk", duration=30, priority="high", frequency="daily")
+    task.toggle_complete()
+    task.last_done = datetime.now()
+    task.toggle_complete()  # toggle back
+    assert task.completed is False
+    assert task.last_done is None
+
+
+def test_toggle_complete_back_preserves_last_done_for_nonrecurring():
+    task = Task(name="Checkup", duration=45, priority="low", frequency=None)
+    when = datetime.now()
+    task.toggle_complete()
+    task.last_done = when
+    task.toggle_complete()  # toggle back
+    assert task.completed is False
+    assert task.last_done == when
 
 
 def test_set_name_rejects_blank():
@@ -568,7 +589,7 @@ def test_completion_ratio_all_already_completed():
     owner = Owner(name="Kim", time_available=[("08:00", "09:00")])
     pet = Pet(name="Biscuit", species="Dog")
     task = Task(name="Walk", duration=20, priority="high")
-    task.mark_complete()
+    task.toggle_complete()
     pet.add_task(task)
     owner.add_pet(pet)
 
@@ -675,51 +696,44 @@ def test_create_schedule_dependency_cycle_falls_back_gracefully():
 
 # ── Task recurrence: complete_task ───────────────────────────────────────────
 
-def test_complete_task_daily_creates_next():
+def test_complete_task_daily_marks_complete_no_new_task():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Walk")
+    result = Scheduler(owner).complete_task("Buddy", "Walk")
 
-    assert next_task is not None
-    assert next_task.completed is False
-    assert next_task.frequency == "daily"
-    assert any(t.name == "Walk" and t.completed for t in pet.tasks)
-    assert len(pet.tasks) == 2
+    assert result is None
+    assert len(pet.tasks) == 1
+    assert pet.tasks[0].completed is True
 
 
-def test_complete_task_weekly_creates_next():
+def test_complete_task_weekly_marks_complete_no_new_task():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Bath", duration=20, priority="medium", frequency="weekly"))
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Bath")
+    Scheduler(owner).complete_task("Buddy", "Bath")
 
-    assert next_task is not None
-    assert next_task.completed is False
-    assert next_task.frequency == "weekly"
-    assert len(pet.tasks) == 2
+    assert len(pet.tasks) == 1
+    assert pet.tasks[0].completed is True
 
 
-def test_complete_task_monthly_creates_next():
-    """Monthly frequency produces a new task occurrence, mirroring daily/weekly behavior."""
+def test_complete_task_monthly_marks_complete_no_new_task():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Flea Treatment", duration=15, priority="low", frequency="monthly"))
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Flea Treatment")
+    Scheduler(owner).complete_task("Buddy", "Flea Treatment")
 
-    assert next_task is not None
-    assert next_task.completed is False
-    assert next_task.frequency == "monthly"
-    assert len(pet.tasks) == 2
+    assert len(pet.tasks) == 1
+    assert pet.tasks[0].completed is True
 
 
-def test_complete_task_no_frequency_returns_none():
+def test_complete_task_no_frequency_marks_complete_returns_none():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="One-off Checkup", duration=45, priority="low", frequency=None))
@@ -729,6 +743,66 @@ def test_complete_task_no_frequency_returns_none():
 
     assert result is None
     assert pet.tasks[0].completed is True
+
+
+def test_complete_task_sets_last_done_when_completing():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    owner.add_pet(pet)
+
+    before = datetime.now()
+    Scheduler(owner).complete_task("Buddy", "Walk")
+    after = datetime.now()
+
+    assert before <= pet.tasks[0].last_done <= after
+
+
+def test_complete_task_toggle_back_to_incomplete():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    owner.add_pet(pet)
+
+    scheduler = Scheduler(owner)
+    scheduler.complete_task("Buddy", "Walk")
+    assert pet.tasks[0].completed is True
+    scheduler.complete_task("Buddy", "Walk")  # toggle back
+    assert pet.tasks[0].completed is False
+    assert pet.tasks[0].last_done is None     # cleared because frequency is set
+
+
+def test_complete_task_toggle_back_nonrecurring_preserves_last_done():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Checkup", duration=45, priority="low", frequency=None))
+    owner.add_pet(pet)
+
+    scheduler = Scheduler(owner)
+    scheduler.complete_task("Buddy", "Checkup")
+    when = pet.tasks[0].last_done
+    scheduler.complete_task("Buddy", "Checkup")  # toggle back
+    assert pet.tasks[0].completed is False
+    assert pet.tasks[0].last_done == when  # last_done preserved for non-recurring
+
+
+def test_complete_task_toggle_back_bypasses_dependency_check():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    feed = Task(name="Feed", duration=10, priority="high")
+    walk = Task(name="Walk", duration=20, priority="high", depends_on="Feed")
+    feed.toggle_complete()
+    walk.toggle_complete()
+    walk.last_done = datetime.now()
+    pet.add_task(feed)
+    pet.add_task(walk)
+    owner.add_pet(pet)
+
+    scheduler = Scheduler(owner)
+    scheduler.complete_task("Buddy", "Feed")   # toggle Feed back to incomplete
+    # Walk is completed but its dependency is now incomplete — un-completing should still work
+    scheduler.complete_task("Buddy", "Walk")
+    assert walk.completed is False
 
 
 def test_complete_task_raises_for_unknown_pet():
@@ -752,35 +826,6 @@ def test_complete_task_raises_for_unknown_task():
         pass
 
 
-def test_complete_task_raises_if_already_completed():
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    task = Task(name="Walk", duration=30, priority="high", frequency="daily")
-    task.mark_complete()
-    pet.add_task(task)
-    owner.add_pet(pet)
-    try:
-        Scheduler(owner).complete_task("Buddy", "Walk")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
-
-
-def test_complete_task_raises_if_already_completed_no_frequency():
-    """complete_task() raises ValueError even for a one-time (frequency=None) task that is already done."""
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    task = Task(name="Checkup", duration=45, priority="low", frequency=None)
-    task.mark_complete()
-    pet.add_task(task)
-    owner.add_pet(pet)
-    try:
-        Scheduler(owner).complete_task("Buddy", "Checkup")
-        assert False, "Expected ValueError"
-    except ValueError:
-        pass
-
-
 def test_complete_task_raises_if_dependency_not_done():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
@@ -798,7 +843,7 @@ def test_complete_task_allowed_when_dependency_done():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     feed = Task(name="Feed", duration=10, priority="high")
-    feed.mark_complete()
+    feed.toggle_complete()
     pet.add_task(feed)
     pet.add_task(Task(name="Walk", duration=20, priority="high", depends_on="Feed"))
     owner.add_pet(pet)
@@ -808,107 +853,142 @@ def test_complete_task_allowed_when_dependency_done():
     assert walk.completed
 
 
-def test_complete_task_new_task_inherits_fields():
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    original = Task(
-        name="Walk", duration=30, priority="high",
-        frequency="daily", preferred_slot="morning",
-        time="07:00", depends_on="Feed"
-    )
-    pet.add_task(original)
-    owner.add_pet(pet)
-
-    next_task = Scheduler(owner).complete_task("Buddy", "Walk")
-
-    assert next_task.duration == 30
-    assert next_task.priority == "high"
-    assert next_task.preferred_slot == "morning"
-    assert next_task.time is None  # time is not inherited; assigned fresh by create_schedule()
-    assert next_task.depends_on == "Feed"
-    assert next_task.frequency == "daily"
-
-
-def test_complete_task_last_done_is_recent():
-    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
-    pet = Pet(name="Buddy", species="Dog")
-    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
-    owner.add_pet(pet)
-
-    before = datetime.now()
-    next_task = Scheduler(owner).complete_task("Buddy", "Walk")
-    after = datetime.now()
-
-    assert before <= next_task.last_done <= after
-
-
-def test_complete_task_new_task_in_filter():
+def test_complete_task_in_filter_after_toggle():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
     owner.add_pet(pet)
 
     scheduler = Scheduler(owner)
-    next_task = scheduler.complete_task("Buddy", "Walk")
+    scheduler.complete_task("Buddy", "Walk")
+    scheduler.complete_task("Buddy", "Walk")  # toggle back
     incomplete = scheduler.filter_tasks(completed=False, pet_name="Buddy")
 
-    assert next_task in incomplete
     assert len(incomplete) == 1
+    assert incomplete[0].name == "Walk"
 
 
-def test_complete_task_multiple_cycles_unique_names():
+# ── Pet.add_task duplicate name validation (Cases A & B) ─────────────────────
+
+def test_add_task_duplicate_name_still_raises_by_default():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high"))
+    try:
+        pet.add_task(Task(name="Walk", duration=30, priority="high"))
+        assert False, "Expected ValueError for identical duplicate"
+    except ValueError:
+        pass
+
+
+def test_add_task_duplicate_name_allowed_case_a_different_slots():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot="morning"))
+    pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot="evening"))
+    assert len(pet.tasks) == 2
+
+
+def test_add_task_duplicate_name_raises_if_one_slot_is_none():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot=None))
+    try:
+        pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot="morning"))
+        assert False, "Expected ValueError: Case A requires both slots non-None"
+    except ValueError:
+        pass
+
+
+def test_add_task_duplicate_name_raises_if_both_slots_none():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot=None))
+    try:
+        pet.add_task(Task(name="Walk", duration=30, priority="high", preferred_slot=None))
+        assert False, "Expected ValueError: both slots None"
+    except ValueError:
+        pass
+
+
+def test_add_task_duplicate_name_allowed_case_b_different_priority():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high",
+                      frequency="daily", preferred_slot="morning", depends_on=None))
+    pet.add_task(Task(name="Walk", duration=30, priority="low",
+                      frequency="daily", preferred_slot="morning", depends_on=None))
+    assert len(pet.tasks) == 2
+
+
+def test_add_task_duplicate_name_raises_case_b_different_duration():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high",
+                      frequency="daily", preferred_slot="morning", depends_on=None))
+    try:
+        pet.add_task(Task(name="Walk", duration=20, priority="low",
+                          frequency="daily", preferred_slot="morning", depends_on=None))
+        assert False, "Expected ValueError: duration differs so Case B does not apply"
+    except ValueError:
+        pass
+
+
+# ── Scheduler: reset_due_recurring_tasks ─────────────────────────────────────
+
+def test_reset_due_recurring_tasks_resets_overdue_completed():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
-    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    task = Task(name="Walk", duration=30, priority="high", frequency="daily",
+                completed=True, last_done=datetime.now() - timedelta(days=2))
+    pet.add_task(task)
     owner.add_pet(pet)
 
-    scheduler = Scheduler(owner)
-    t2 = scheduler.complete_task("Buddy", "Walk")       # creates "Walk #2"
-    scheduler.complete_task("Buddy", t2.name)            # creates "Walk #3"
+    count = Scheduler(owner).reset_due_recurring_tasks()
 
-    names = {t.name for t in pet.tasks}
-    assert "Walk" in names
-    assert "Walk #2" in names
-    assert "Walk #3" in names
-    assert len(pet.tasks) == 3
+    assert count == 1
+    assert task.completed is False
+    assert task.last_done is not None  # last_done preserved for urgency scoring
 
 
-def test_complete_task_new_occurrence_is_not_completed():
-    """A newly created recurrence task must always start with completed=False."""
+def test_reset_due_recurring_tasks_does_not_reset_not_yet_due():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
-    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    task = Task(name="Walk", duration=30, priority="high", frequency="weekly",
+                completed=True, last_done=datetime.now() - timedelta(days=3))
+    pet.add_task(task)
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Walk")
-    assert next_task.completed is False
+    count = Scheduler(owner).reset_due_recurring_tasks()
+
+    assert count == 0
+    assert task.completed is True
 
 
-def test_complete_task_name_with_embedded_number_not_stripped():
-    """'Walk 2 dogs' has no ' #N' suffix, so the full name is the base; next is 'Walk 2 dogs #2'."""
+def test_reset_due_recurring_tasks_ignores_non_recurring_completed():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
-    pet.add_task(Task(name="Walk 2 dogs", duration=30, priority="high", frequency="daily"))
+    task = Task(name="Checkup", duration=45, priority="low",
+                frequency=None, completed=True,
+                last_done=datetime.now() - timedelta(days=60))
+    pet.add_task(task)
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Walk 2 dogs")
+    count = Scheduler(owner).reset_due_recurring_tasks()
 
-    assert next_task is not None
-    assert next_task.name == "Walk 2 dogs #2"
+    assert count == 0
+    assert task.completed is True
 
 
-def test_complete_task_starting_name_with_hash_suffix():
-    """Task named 'Feed #1' has a parseable suffix; base is 'Feed', so next is 'Feed #2' not 'Feed #1 #2'."""
+def test_reset_due_recurring_tasks_no_owner_returns_zero():
+    assert Scheduler().reset_due_recurring_tasks() == 0
+
+
+def test_reset_due_recurring_tasks_called_by_create_schedule():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
-    pet.add_task(Task(name="Feed #1", duration=10, priority="high", frequency="daily"))
+    task = Task(name="Walk", duration=30, priority="high", frequency="daily",
+                completed=True, last_done=datetime.now() - timedelta(days=2))
+    pet.add_task(task)
     owner.add_pet(pet)
 
-    next_task = Scheduler(owner).complete_task("Buddy", "Feed #1")
+    Scheduler(owner).create_schedule()
 
-    assert next_task is not None
-    assert next_task.name == "Feed #2"
-    assert any(t.name == "Feed #1" and t.completed for t in pet.tasks)
+    assert task.completed is False
 
 
 # ── Conflict detection ────────────────────────────────────────────────────────
@@ -1030,7 +1110,7 @@ def _make_filter_scheduler():
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     buddy = Pet(name="Buddy", species="Dog")
     walk = Task(name="Walk", duration=30, priority="high")
-    walk.mark_complete()
+    walk.toggle_complete()
     buddy.add_task(walk)
     buddy.add_task(Task(name="Feed", duration=10, priority="medium"))
     whiskers = Pet(name="Whiskers", species="Cat")

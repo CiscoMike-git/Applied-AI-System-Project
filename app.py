@@ -52,6 +52,149 @@ def _priority_table(rows: list, priority_col: str = "Priority") -> None:
         st.table(rows)
 
 
+def _task_table_with_delete(pet: "Pet") -> bool:
+    """Render the task list as column rows with per-row completion checkbox and 🗑 delete button.
+    Returns True if any state change occurred (caller should st.rerun())."""
+    PRIORITY_COLOR = {"high": "#ff4b4b", "medium": "#ffd700", "low": "#21c55d"}
+    PRIORITY_TEXT  = {"high": "white",   "medium": "black",   "low": "white"}
+
+    # Scoped to 8-column horizontal blocks — no other section of the app uses 8 columns.
+    # (table not formatting correctly, come back if I have time)
+
+    # st.markdown("""
+    # <style>
+    # /* ── row gap: collapse vertical spacing so border-bottom shows between rows ── */
+    # div[data-testid="stVerticalBlockBorderWrapper"]:has(
+    #     div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="stVerticalBlock"] {
+    #     gap: 0 !important;
+    #     row-gap: 0 !important;
+    # }
+
+    # /* ── each row: no column gap, border under every row ── */
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) {
+    #     gap: 0 !important;
+    #     border-bottom: 1px solid rgba(49,51,63,0.15);
+    # }
+
+    # /* ── each cell: right border + padding + no wrapping ── */
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"] {
+    #     border-right: 1px solid rgba(49,51,63,0.15);
+    #     padding-top:    0.15rem !important;
+    #     padding-bottom: 0.15rem !important;
+    # }
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"] p,
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"] span,
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"] label {
+    #     white-space: nowrap !important;
+    #     overflow: visible !important;
+    # }
+
+    # /* ── delete column: no right border ── */
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"]:nth-child(8) {
+    #     border-right: none;
+    #     display: flex !important;
+    #     align-items: center !important;
+    #     justify-content: center !important;
+    # }
+
+    # /* ── delete button and all its children: fully centered ── */
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"]:nth-child(8) > div {
+    #     width: 100% !important;
+    # }
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"]:nth-child(8) button {
+    #     width: 100% !important;
+    #     padding: 0 !important;
+    #     display: flex !important;
+    #     justify-content: center !important;
+    #     align-items: center !important;
+    # }
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"]:nth-child(8) button > div,
+    # div[data-testid="stHorizontalBlock"]:has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) > div[data-testid="column"]:nth-child(8) button p {
+    #     width: 100% !important;
+    #     text-align: center !important;
+    #     margin: 0 !important;
+    #     padding: 0 !important;
+    #     display: flex !important;
+    #     justify-content: center !important;
+    #     align-items: center !important;
+    # }
+
+    # /* ── header row: distinct background ── */
+    # div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"]:nth-child(1):has(
+    #     > div[data-testid="column"]:nth-child(8)
+    # ) {
+    #     background-color: rgba(49,51,63,0.08) !important;
+    #     border-radius: 4px 4px 0 0;
+    # }
+    # </style>
+    # """, unsafe_allow_html=True)
+
+    deleted = False
+    changed = False
+    with st.container(border=True):
+        headers = ["Done", "Task", "Duration", "Priority", "Frequency", "Slot", "Depends On", ""]
+        col_widths = [0.65, 1.4, 1.0, 1.1, 1.3, 1.3, 1.4, 0.6]
+        cols = st.columns(col_widths)
+        for col, header in zip(cols[:7], headers[:7]):
+            col.markdown(f"**{header}**")
+        for task in list(pet.tasks):
+            cols = st.columns(col_widths)
+            checked = cols[0].checkbox(
+                "",
+                value=task.completed,
+                key=f"chk_{pet.name}_{task.name}",
+                label_visibility="collapsed",
+            )
+            if checked != task.completed:
+                try:
+                    Scheduler(owner=st.session_state.owner).complete_task(pet.name, task.name)
+                    st.session_state.pop("last_schedule", None)
+                    st.session_state.pop("last_advice", None)
+                    changed = True
+                except ValueError as e:
+                    st.error(str(e))
+                    changed = True
+            cols[1].write(task.name)
+            cols[2].write(f"{task.duration} min")
+            color = PRIORITY_COLOR.get(task.priority, "")
+            text  = PRIORITY_TEXT.get(task.priority, "black")
+            cols[3].markdown(
+                f"<span style='background:{color};padding:2px 6px;border-radius:4px;"
+                f"color:{text}'>{task.priority.title()}</span>",
+                unsafe_allow_html=True,
+            )
+            cols[4].write(task.frequency.title() if task.frequency else "—")
+            cols[5].write(task.preferred_slot.title() if task.preferred_slot else "—")
+            cols[6].write(task.depends_on or "—")
+            if cols[7].button("🗑 ", key=f"del_{pet.name}_{task.name}"):
+                pet.remove_task(task.name)
+                st.session_state.pop("last_schedule", None)
+                st.session_state.pop("last_advice", None)
+                deleted = True
+    return deleted or changed
+
+
 def _make_tags(row: dict) -> str:
     parts = []
     if row.get("preferred_slot"):
@@ -176,6 +319,8 @@ def _normalize_time_input(t: str) -> str:
             t = t[:2] + ":" + t[2:]
         elif len(t) == 3:
             t = t[0] + ":" + t[1:]
+        elif period and len(t) in (1, 2):
+            t = t + ":00"
     if period and ":" in t:
         try:
             h, mn = map(int, t.split(":"))
@@ -273,6 +418,7 @@ with col_rem:
 st.subheader("Tasks")
 
 pet_names = [p.name for p in st.session_state.owner.pets]
+Scheduler(owner=st.session_state.owner).reset_due_recurring_tasks()
 
 if pet_names:
     selected_pet_name = st.selectbox("Select Pet", pet_names)
@@ -280,18 +426,8 @@ if pet_names:
     selected_pet = next(p for p in st.session_state.owner.pets if p.name == selected_pet_name)
     if selected_pet.tasks:
         st.write("Current Tasks:")
-        _priority_table([
-            {
-                "Task":      t.name,
-                "Duration":  f"{int(t.duration)} min",
-                "Priority":  t.priority.title(),
-                "Frequency": t.frequency.title() if t.frequency else "—",
-                "Slot":      t.preferred_slot.title() if t.preferred_slot else "—",
-                "Depends On": t.depends_on or "—",
-                "Done":      "✓" if t.completed else "",
-            }
-            for t in selected_pet.tasks
-        ])
+        if _task_table_with_delete(selected_pet):
+            st.rerun()
     else:
         st.info("No tasks yet for this pet. Add one below.")
 
@@ -313,11 +449,9 @@ if pet_names:
         preferred_slot = st.selectbox("Preferred Slot", slot_opts)
         preferred_slot = None if preferred_slot == "None" else preferred_slot.lower()
     with col6:
-        depends_on_input = st.text_input("Depends On (task name)", value="").title().strip()
-        existing_task_names = [t.name for t in selected_pet.tasks]
-        if depends_on_input and depends_on_input not in existing_task_names:
-            st.caption(f"⚠ No task named '{depends_on_input}' exists for this pet.")
-        depends_on = depends_on_input or None
+        depends_on_opts = ["None"] + [t.name for t in selected_pet.tasks]
+        depends_on_select = st.selectbox("Depends On", depends_on_opts)
+        depends_on = None if depends_on_select == "None" else depends_on_select
 
     if st.button("Add Task"):
         try:
@@ -335,33 +469,6 @@ if pet_names:
         except ValueError as e:
             st.error(str(e))
 
-    incomplete_tasks = [t for t in selected_pet.tasks if not t.completed]
-    if incomplete_tasks:
-        st.markdown("**Mark Task as Completed**")
-        col_done1, col_done2 = st.columns(2)
-        with col_done1:
-            task_to_complete = st.selectbox(
-                "Select Task",
-                [t.name for t in incomplete_tasks],
-                key="complete_task_select",
-            )
-        with col_done2:
-            st.write("")  # vertical alignment spacer
-            st.write("")
-            if st.button("Mark Completed"):
-                try:
-                    logger.info(
-                        "Task marked complete via UI: pet='%s', task='%s'",
-                        selected_pet_name, task_to_complete,
-                    )
-                    scheduler = Scheduler(owner=st.session_state.owner)
-                    scheduler.complete_task(selected_pet_name, task_to_complete)
-                    st.success(f"'{task_to_complete}' marked as completed.")
-                    st.session_state.pop("last_schedule", None)
-                    st.session_state.pop("last_advice", None)
-                    st.rerun()
-                except ValueError as e:
-                    st.error(str(e))
 else:
     st.info("Add a pet first to manage tasks.")
 
