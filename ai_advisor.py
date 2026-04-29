@@ -27,10 +27,10 @@ from knowledge_base import retrieve_relevant_chunks
 logger = logging.getLogger("petwise.ai_advisor")
 
 MODEL = "gemini-2.5-flash-lite"
-MAX_INPUT_CHARS = 2000
-MAX_KNOWLEDGE_CHARS = 3000
+MAX_INPUT_CHARS = 4000
+MAX_KNOWLEDGE_CHARS = 4000
 MAX_TOKENS_ADVICE = 600    # calls 1 & 2: short JSON (recommendations, critique)
-MAX_TOKENS_SCHEDULE = 900  # call 3: JSON array of all scheduled tasks
+MAX_TOKENS_SCHEDULE = 1500  # call 3: JSON array of all scheduled tasks
 
 _EMPTY_RESULT: dict = {
     "recommendation": "",
@@ -256,7 +256,7 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
         task_names = [e["task"] for e in schedule.get("entries", [])]
         task_names += [s["task"] for s in schedule.get("skipped", [])]
 
-        chunks = retrieve_relevant_chunks(species_list, task_names, max_chunks=4)
+        chunks = retrieve_relevant_chunks(species_list, task_names, max_chunks=5)
         sources_used = [key for key, _ in chunks]
         result["sources_used"] = sources_used
         logger.info("RAG retrieved %d chunks: %s", len(chunks), sources_used)
