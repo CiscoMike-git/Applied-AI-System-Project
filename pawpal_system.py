@@ -79,9 +79,11 @@ class Task:
         self.preferred_slot = slot
 
     def urgency_multiplier(self) -> float:
-        """Return how overdue a recurring task is as a multiplier (0.0 if on schedule or no frequency)."""
-        if self.frequency is None or self.last_done is None:
+        """Return how overdue a recurring task is as a multiplier (0.0 if no frequency)."""
+        if self.frequency is None:
             return 0.0
+        if self.last_done is None:
+            return 1.0  # never-done recurring task: treat as one period overdue
         days_since = (datetime.now() - self.last_done).days
         period = FREQUENCY_DAYS[self.frequency]
         return max(0.0, days_since / period - 1.0)
@@ -114,8 +116,8 @@ class Pet:
 
         Raises ValueError if a task with the same name already exists, UNLESS:
         - Case A: both tasks have different non-None preferred_slot values, OR
-        - Case B: the tasks have different priority values and all other attributes
-          (duration, frequency, preferred_slot, depends_on) are identical.
+        - Case B: the tasks have different priority values and frequency, preferred_slot,
+          and depends_on are identical (duration may differ).
         """
         for existing in self.tasks:
             if existing.name != task.name:
@@ -127,16 +129,20 @@ class Pet:
                 and task.preferred_slot != existing.preferred_slot
             ):
                 continue
-            # Case B: different priority, all other fields identical
+            # Case B: different priority, frequency/slot/depends_on identical (duration may differ)
             if (
                 task.priority != existing.priority
-                and task.duration == existing.duration
                 and task.frequency == existing.frequency
                 and task.preferred_slot == existing.preferred_slot
                 and task.depends_on == existing.depends_on
             ):
                 continue
-            raise ValueError(f"Task '{task.name}' already exists for this pet.")
+            raise ValueError(
+                f"Task '{task.name}' already exists for this pet. "
+                "Same-named tasks are only allowed when they have different non-None time slots "
+                "(e.g. 'morning' vs 'evening'), or when they share the same frequency, "
+                "slot, and dependencies but differ in priority."
+            )
         self.tasks.append(task)
 
     def remove_task(self, name: str) -> None:
@@ -144,6 +150,12 @@ class Pet:
         if not any(t.name == name for t in self.tasks):
             raise ValueError(f"Task '{name}' not found for this pet.")
         self.tasks = [t for t in self.tasks if t.name != name]
+
+    def remove_task_by_index(self, index: int) -> None:
+        """Remove a task by its list index, raising ValueError if out of range."""
+        if index < 0 or index >= len(self.tasks):
+            raise ValueError(f"Task index {index} is out of range.")
+        del self.tasks[index]
 
 
 @dataclass
@@ -300,16 +312,19 @@ class Scheduler:
     @staticmethod
     def _topo_sort(ordered_pairs: list) -> list:
         """Stable topological sort: reorder pairs to satisfy Task.depends_on constraints."""
-        name_to_idx = {task.name: i for i, (_, task) in enumerate(ordered_pairs)}
+        name_to_indices: dict[str, list[int]] = {}
+        for i, (_, task) in enumerate(ordered_pairs):
+            name_to_indices.setdefault(task.name, []).append(i)
+
         n = len(ordered_pairs)
         in_degree = [0] * n
         edges = [[] for _ in range(n)]
 
         for i, (_, task) in enumerate(ordered_pairs):
-            if task.depends_on and task.depends_on in name_to_idx:
-                parent = name_to_idx[task.depends_on]
-                edges[parent].append(i)
-                in_degree[i] += 1
+            if task.depends_on and task.depends_on in name_to_indices:
+                for parent in name_to_indices[task.depends_on]:
+                    edges[parent].append(i)
+                    in_degree[i] += 1
 
         available = [i for i in range(n) if in_degree[i] == 0]
         heapify(available)
@@ -511,6 +526,37 @@ class Scheduler:
                     )
         return warnings
 
+    def complete_task_by_index(self, pet_name: str, task_index: int) -> None:
+        """Toggle completion for a task identified by its position in the pet's task list.
+
+        Raises ValueError if the pet is not found or the index is out of range.
+        """
+        if self.owner is None:
+            raise ValueError("Cannot complete task: no owner assigned.")
+
+        pet = next((p for p in self.owner.pets if p.name == pet_name), None)
+        if pet is None:
+            raise ValueError(f"Pet '{pet_name}' not found.")
+
+        if task_index < 0 or task_index >= len(pet.tasks):
+            raise ValueError(f"Task index {task_index} is out of range for pet '{pet_name}'.")
+
+        task = pet.tasks[task_index]
+
+        if not task.completed:
+            if task.depends_on:
+                prereq = next((t for t in pet.tasks if t.name == task.depends_on), None)
+                if prereq is not None and not prereq.completed:
+                    raise ValueError(
+                        f"Cannot complete '{task.name}': '{task.depends_on}' must be completed first."
+                    )
+            task.toggle_complete()
+            task.last_done = datetime.now()
+            logger.info("Task completed: pet='%s', task='%s'", pet_name, task.name)
+        else:
+            task.toggle_complete()
+            logger.info("Task un-completed: pet='%s', task='%s'", pet_name, task.name)
+
     def complete_task(self, pet_name: str, task_name: str) -> None:
         """Toggle a task's completion state.
 
@@ -595,16 +641,29 @@ class Scheduler:
 
         if not owner.pets:
             return {
-                "entries": [], "skipped": [],
+                "entries": [], "skipped": [], "completed": [], "upcoming": [],
                 "total_time_scheduled": 0.0, "time_available": owner.time_available_minutes,
-                "completion_ratio": 1.0,
+                "completion_ratio": 1.0, "conflicts": [],
                 "explanation": f"{owner.name} has no pets registered. Add a pet and its tasks first.",
             }
 
         incomplete_pairs = [(pet, task) for pet in owner.pets for task in pet.tasks if not task.completed]
         all_pairs = [(pet, task) for pet, task in incomplete_pairs if self._is_due(task)]
-        upcoming_pairs = [(pet, task) for pet, task in incomplete_pairs if not self._is_due(task)]
-        completed_pairs = [(pet, task) for pet in owner.pets for task in pet.tasks if task.completed]
+        # "Coming Up": completed recurring tasks whose next occurrence is not yet due
+        upcoming_pairs = [
+            (pet, task)
+            for pet in owner.pets
+            for task in pet.tasks
+            if task.completed and task.frequency is not None and not self._is_due(task)
+        ]
+        upcoming_ids = {id(task) for _, task in upcoming_pairs}
+        # "Already Completed": one-time completed tasks, or recurring ones already due again
+        completed_pairs = [
+            (pet, task)
+            for pet in owner.pets
+            for task in pet.tasks
+            if task.completed and id(task) not in upcoming_ids
+        ]
 
         def _upcoming_row(pet, task):
             from datetime import timedelta
@@ -622,7 +681,7 @@ class Scheduler:
             return {
                 "entries": [], "skipped": [], "completed": [], "upcoming": [],
                 "total_time_scheduled": 0.0, "time_available": owner.time_available_minutes,
-                "completion_ratio": 1.0,
+                "completion_ratio": 1.0, "conflicts": [],
                 "explanation": f"{owner.name} has pets ({pet_names}) but none have tasks. Add tasks first.",
             }
 
@@ -640,13 +699,13 @@ class Scheduler:
                 ],
                 "upcoming": [_upcoming_row(pet, task) for pet, task in upcoming_pairs],
                 "total_time_scheduled": 0.0, "time_available": owner.time_available_minutes,
-                "completion_ratio": 1.0,
+                "completion_ratio": 1.0, "conflicts": [],
                 "explanation": f"All tasks for {owner.name}'s pets are already completed.",
             }
 
         # Knapsack selects the best-value subset that fits within the time budget
         selected = self._knapsack_select(all_pairs, owner.time_available_minutes, covered_slots)
-        selected_names = {task.name for _, task in selected}
+        selected_ids = {id(task) for _, task in selected}
         skipped = [
             {
                 "pet": pet.name, "task": task.name,
@@ -655,8 +714,38 @@ class Scheduler:
                 "frequency": task.frequency, "depends_on": task.depends_on,
                 "reason": "time budget exhausted",
             }
-            for pet, task in all_pairs if task.name not in selected_names
+            for pet, task in all_pairs if id(task) not in selected_ids
         ]
+
+        # Drop any selected task whose prerequisite was not also selected (iterative for chains).
+        # Upcoming tasks (completed recurring, not yet due again) and completed one-time tasks
+        # satisfy dependencies. reset_due_recurring_tasks() guarantees completed_pairs never
+        # contains overdue recurring tasks, so all of completed_pairs is safe to include.
+        already_done_names = (
+            {task.name for _, task in upcoming_pairs} |
+            {task.name for _, task in completed_pairs}
+        )
+        changed = True
+        while changed:
+            changed = False
+            selected_task_names = {task.name for _, task in selected}
+            satisfied_names = selected_task_names | already_done_names
+            violations = [(pet, task) for pet, task in selected
+                          if task.depends_on and task.depends_on not in satisfied_names]
+            if violations:
+                violation_ids = {id(task) for _, task in violations}
+                skipped.extend(
+                    {
+                        "pet": pet.name, "task": task.name,
+                        "duration": task.duration, "priority": task.priority,
+                        "time": task.time, "preferred_slot": task.preferred_slot,
+                        "frequency": task.frequency, "depends_on": task.depends_on,
+                        "reason": f"prerequisite '{task.depends_on}' was not scheduled",
+                    }
+                    for pet, task in violations
+                )
+                selected = [(pet, task) for pet, task in selected if id(task) not in violation_ids]
+                changed = True
 
         # Sort selected tasks: priority → pet grouping (reduces context-switching) → duration
         selected.sort(key=lambda p: (PRIORITY_RANK[p[1].priority], p[0].name, p[1].duration))
@@ -677,8 +766,8 @@ class Scheduler:
         # only contains tasks with a confirmed start time.
         unplaceable = [(pet, task) for pet, task in selected if task.time is None]
         if unplaceable:
-            unplaceable_names = {task.name for _, task in unplaceable}
-            selected = [(pet, task) for pet, task in selected if task.name not in unplaceable_names]
+            unplaceable_ids = {id(task) for _, task in unplaceable}
+            selected = [(pet, task) for pet, task in selected if id(task) not in unplaceable_ids]
             skipped.extend(
                 {
                     "pet": pet.name, "task": task.name,
@@ -690,15 +779,18 @@ class Scheduler:
                 for pet, task in unplaceable
             )
 
-        entries = [
-            {
-                "order": i, "pet": pet.name, "task": task.name,
-                "duration": task.duration, "priority": task.priority,
-                "time": task.time, "preferred_slot": task.preferred_slot,
-                "frequency": task.frequency, "depends_on": task.depends_on,
-            }
-            for i, (pet, task) in enumerate(selected, 1)
-        ]
+        entries = sorted(
+            [
+                {
+                    "order": i, "pet": pet.name, "task": task.name,
+                    "duration": task.duration, "priority": task.priority,
+                    "time": task.time, "preferred_slot": task.preferred_slot,
+                    "frequency": task.frequency, "depends_on": task.depends_on,
+                }
+                for i, (pet, task) in enumerate(selected, 1)
+            ],
+            key=lambda e: e["time"] or "99:99",
+        )
         time_used = sum(task.duration for _, task in selected)
 
         total_incomplete = len(all_pairs)

@@ -177,10 +177,10 @@ def test_scheduling_value_slot_bonus_applied():
     assert value_match > value_no_match
 
 
-def test_urgency_multiplier_never_done_returns_zero():
-    """urgency_multiplier() returns 0.0 when frequency is set but last_done is None (task never completed)."""
+def test_urgency_multiplier_never_done_returns_one():
+    """urgency_multiplier() returns 1.0 when frequency is set but last_done is None (treat as one period overdue)."""
     task = Task(name="Walk", duration=30, priority="high", frequency="daily", last_done=None)
-    assert task.urgency_multiplier() == 0.0
+    assert task.urgency_multiplier() == 1.0
 
 
 def test_urgency_multiplier_last_done_in_future_returns_zero():
@@ -221,11 +221,12 @@ def test_add_task_increases_pet_task_count():
 
 
 def test_add_task_duplicate_name_raises():
-    """Adding a second task with the same name to a pet raises ValueError; pet still has one task."""
+    """Adding a second task with the same name and identical priority raises ValueError (Case B does not apply
+    when priority is the same). A plain same-name same-priority duplicate is rejected."""
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Walk", duration=30, priority="high"))
     try:
-        pet.add_task(Task(name="Walk", duration=15, priority="medium"))
+        pet.add_task(Task(name="Walk", duration=15, priority="high"))
         assert False, "Expected ValueError"
     except ValueError:
         pass
@@ -665,7 +666,8 @@ def test_depends_on_ordering_respected():
 
 
 def test_create_schedule_depends_on_nonexistent_task_no_crash():
-    """A dangling depends_on reference (task not in schedule) is silently ignored; no exception raised."""
+    """A dangling depends_on reference (prerequisite task does not exist in the owner's pets) does not crash.
+    The scheduler moves the task to skipped because its prerequisite was never schedulable."""
     owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Walk", duration=30, priority="high", depends_on="Vet Visit"))
@@ -673,8 +675,9 @@ def test_create_schedule_depends_on_nonexistent_task_no_crash():
 
     schedule = Scheduler(owner).create_schedule()
 
-    entry_names = [e["task"] for e in schedule["entries"]]
-    assert "Walk" in entry_names
+    # No crash; Walk lands in skipped because "Vet Visit" was never in the selected set
+    skipped_names = [s["task"] for s in schedule["skipped"]]
+    assert "Walk" in skipped_names
 
 
 def test_create_schedule_dependency_cycle_falls_back_gracefully():
@@ -916,16 +919,16 @@ def test_add_task_duplicate_name_allowed_case_b_different_priority():
     assert len(pet.tasks) == 2
 
 
-def test_add_task_duplicate_name_raises_case_b_different_duration():
+def test_add_task_duplicate_name_case_b_different_priority_allowed():
+    """Case B: same name, different priority, but identical frequency/slot/depends_on — duration may differ.
+    This combination is explicitly permitted by add_task and must NOT raise ValueError."""
     pet = Pet(name="Buddy", species="Dog")
     pet.add_task(Task(name="Walk", duration=30, priority="high",
                       frequency="daily", preferred_slot="morning", depends_on=None))
-    try:
-        pet.add_task(Task(name="Walk", duration=20, priority="low",
-                          frequency="daily", preferred_slot="morning", depends_on=None))
-        assert False, "Expected ValueError: duration differs so Case B does not apply"
-    except ValueError:
-        pass
+    # Different priority (low vs high), same freq/slot/dep — Case B applies; no error expected
+    pet.add_task(Task(name="Walk", duration=20, priority="low",
+                      frequency="daily", preferred_slot="morning", depends_on=None))
+    assert len(pet.tasks) == 2
 
 
 # ── Scheduler: reset_due_recurring_tasks ─────────────────────────────────────

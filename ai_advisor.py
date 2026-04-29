@@ -29,7 +29,7 @@ logger = logging.getLogger("petwise.ai_advisor")
 MODEL = "gemini-2.5-flash-lite"
 MAX_INPUT_CHARS = 4000
 MAX_KNOWLEDGE_CHARS = 4000
-MAX_TOKENS_ADVICE = 600    # calls 1 & 2: short JSON (recommendations, critique)
+MAX_TOKENS_ADVICE = 1200   # calls 1 & 2: raised from 600 — verbose JSON responses need the headroom
 MAX_TOKENS_SCHEDULE = 1500  # call 3: JSON array of all scheduled tasks
 
 _EMPTY_RESULT: dict = {
@@ -80,17 +80,43 @@ def _build_schedule_summary(owner, schedule: dict) -> str:
     lines.append(f"Scheduled tasks ({len(entries)}):")
     for e in entries:
         time_str = e.get("time") or "??"
+        slot_str = f", slot: {e['preferred_slot']}" if e.get("preferred_slot") else ""
+        dep_str = f", requires: {e['depends_on']}" if e.get("depends_on") else ""
         lines.append(
             f"  - {time_str} {e['task']} ({e['pet']}/{_species_for(owner, e['pet'])}, "
-            f"{int(e['duration'])} min, {e['priority']}, {e.get('frequency') or 'one-time'})"
+            f"{int(e['duration'])} min, {e['priority']}, {e.get('frequency') or 'one-time'}"
+            f"{slot_str}{dep_str})"
         )
 
     skipped = schedule.get("skipped", [])
     lines.append(f"Skipped tasks ({len(skipped)}):")
     for s in skipped:
+        slot_str = f", slot: {s['preferred_slot']}" if s.get("preferred_slot") else ""
+        dep_str = f", requires: {s['depends_on']}" if s.get("depends_on") else ""
+        freq_str = s.get("frequency") or "one-time"
+        reason_str = s.get("reason") or "not enough time"
         lines.append(
-            f"  - {s['task']} ({s['pet']}, {int(s['duration'])} min, {s['priority']}) — not enough time"
+            f"  - {s['task']} ({s['pet']}, {int(s['duration'])} min, {s['priority']}, "
+            f"{freq_str}{slot_str}{dep_str}) — {reason_str}"
         )
+
+    completed = schedule.get("completed", [])
+    if completed:
+        lines.append(f"Already completed ({len(completed)}):")
+        for c in completed:
+            dep_str = f", requires: {c['depends_on']}" if c.get("depends_on") else ""
+            lines.append(
+                f"  - {c['task']} ({c['pet']}, {int(c['duration'])} min, {c['priority']}{dep_str})"
+            )
+
+    upcoming = schedule.get("upcoming", [])
+    if upcoming:
+        lines.append(f"Coming up — done this cycle, next occurrence not yet due ({len(upcoming)}):")
+        for u in upcoming:
+            slot_str = f", slot: {u['preferred_slot']}" if u.get("preferred_slot") else ""
+            lines.append(
+                f"  - {u['task']} ({u['pet']}, {u.get('frequency')}, next due: {u.get('next_due', 'unknown')}{slot_str})"
+            )
 
     return "\n".join(lines)
 
@@ -122,38 +148,60 @@ def _validate_revised_schedule(owner, original_schedule: dict, raw_entries: list
     entries survive validation.
     """
     all_original = original_schedule.get("entries", []) + original_schedule.get("skipped", [])
-    task_by_name = {e["task"]: e for e in all_original}
+
+    # Build a multi-valued pool: (task, pet) → list of originals.
+    # Same-named tasks for the same pet are stored as separate entries so each
+    # can be matched and consumed independently.
+    task_pool: dict[tuple, list] = {}
+    for e in all_original:
+        task_pool.setdefault((e["task"], e["pet"]), []).append(e)
+
+    # Track which original objects have been consumed to prevent double-matching.
+    used_orig_ids: set[int] = set()
+
     valid_pets = {p.name for p in owner.pets}
     valid_priorities = {"low", "medium", "high"}
-
     validated: list[dict] = []
-    seen: set[str] = set()
 
     for raw in raw_entries:
         if not isinstance(raw, dict):
             continue
         task_name = raw.get("task", "")
         pet_name = raw.get("pet", "")
+        ai_priority = raw.get("priority", "")
+        key = (task_name, pet_name)
 
-        if task_name not in task_by_name:
-            logger.warning("AI revised schedule: unknown task '%s' — dropped", task_name)
+        # Prefer an unused original whose priority matches the AI's report so that
+        # same-named tasks with different priorities bind to the correct instance.
+        # Fall back to any unused original when no priority match exists.
+        candidates = task_pool.get(key, [])
+        original = None
+        for candidate in candidates:
+            if id(candidate) not in used_orig_ids and candidate.get("priority") == ai_priority:
+                original = candidate
+                break
+        if original is None:
+            for candidate in candidates:
+                if id(candidate) not in used_orig_ids:
+                    original = candidate
+                    break
+
+        if original is None:
+            logger.warning("AI revised schedule: unknown task '%s' for pet '%s' — dropped", task_name, pet_name)
             continue
         if pet_name not in valid_pets:
             logger.warning("AI revised schedule: unknown pet '%s' for task '%s' — dropped", pet_name, task_name)
-            continue
-        if task_name in seen:
-            logger.warning("AI revised schedule: duplicate task '%s' — dropped", task_name)
             continue
         if not _valid_hhmm(raw.get("time")):
             logger.warning("AI revised schedule: invalid time '%s' for task '%s' — dropped", raw.get("time"), task_name)
             continue
 
-        original = task_by_name[task_name]
-        priority = raw.get("priority", "")
-        if priority not in valid_priorities:
-            priority = original["priority"]
+        # Consume this original instance only after all checks pass.
+        used_orig_ids.add(id(original))
 
-        seen.add(task_name)
+        priority = ai_priority if ai_priority in valid_priorities else original["priority"]
+
+        # Store a back-reference (_orig) for identity-based removal below; stripped before return.
         validated.append({
             "order": len(validated) + 1,
             "time": raw["time"],
@@ -164,9 +212,35 @@ def _validate_revised_schedule(owner, original_schedule: dict, raw_entries: list
             "frequency": original.get("frequency"),
             "preferred_slot": original.get("preferred_slot"),
             "depends_on": original.get("depends_on"),
+            "_orig": original,
         })
 
-    # Trim lowest-priority entries until total fits within the time budget
+    # Drop any entry whose prerequisite was not also validated (iterative for chains).
+    # Upcoming and completed tasks both satisfy dependencies. reset_due_recurring_tasks()
+    # guarantees completed never contains overdue recurring tasks by the time the schedule
+    # reaches the advisor, so all of completed is safe to include.
+    already_done_names = (
+        {e["task"] for e in original_schedule.get("upcoming", [])} |
+        {e["task"] for e in original_schedule.get("completed", [])}
+    )
+    changed = True
+    while changed:
+        changed = False
+        scheduled_names = {e["task"] for e in validated}
+        satisfied_names = scheduled_names | already_done_names
+        violations = [e for e in validated if e.get("depends_on") and e["depends_on"] not in satisfied_names]
+        if violations:
+            violation_orig_ids = {id(e["_orig"]) for e in violations}
+            for e in violations:
+                logger.warning(
+                    "AI revised schedule: dropped '%s' — prerequisite '%s' not scheduled",
+                    e["task"], e["depends_on"],
+                )
+            validated = [e for e in validated if id(e["_orig"]) not in violation_orig_ids]
+            changed = True
+
+    # Trim lowest-priority entries until total fits within the time budget.
+    # Remove by object identity so only the specific dropped instance is affected.
     time_available = owner.time_available_minutes
     total = sum(e["duration"] for e in validated)
     if total > time_available:
@@ -175,21 +249,29 @@ def _validate_revised_schedule(owner, original_schedule: dict, raw_entries: list
         while total > time_available and drop_order:
             dropped = drop_order.pop(0)
             total -= dropped["duration"]
-            validated = [e for e in validated if e["task"] != dropped["task"]]
+            drop_orig_id = id(dropped["_orig"])
+            validated = [e for e in validated if id(e["_orig"]) != drop_orig_id]
+            drop_order = [e for e in drop_order if id(e["_orig"]) != drop_orig_id]
             logger.warning("AI revised schedule: dropped '%s' to fit time budget", dropped["task"])
 
     if not validated:
         return None
 
-    scheduled_names = {e["task"] for e in validated}
+    # Skipped = every original not represented in the final validated set (by object identity).
+    scheduled_orig_ids = {id(e["_orig"]) for e in validated}
     skipped = [
         {
             "task": e["task"], "pet": e["pet"], "duration": e["duration"],
             "priority": e["priority"], "frequency": e.get("frequency"),
             "preferred_slot": e.get("preferred_slot"), "depends_on": e.get("depends_on"),
         }
-        for e in all_original if e["task"] not in scheduled_names
+        for e in all_original if id(e) not in scheduled_orig_ids
     ]
+
+    # Strip back-references and renumber before returning.
+    for i, e in enumerate(validated, 1):
+        del e["_orig"]
+        e["order"] = i
 
     # Detect time-overlap conflicts within the validated entries
     conflicts: list[str] = []
@@ -292,8 +374,8 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
             f"Here is today's pet care schedule for {owner_name}:\n\n"
             f"{schedule_summary}\n\n"
             "Please analyze this schedule and provide:\n"
-            "1. RECOMMENDATIONS: 2-3 specific actionable suggestions to improve this schedule\n"
-            "2. CONCERNS: List any potential issues (animal welfare, timing, missing care needs)\n"
+            "1. RECOMMENDATIONS: 2-3 specific actionable suggestions to improve this schedule (1-2 sentences each)\n"
+            "2. CONCERNS: Up to 3 potential issues (animal welfare, timing, missing care needs) — 1 sentence each\n"
             "3. CONFIDENCE: A score from 0-100 indicating how confident you are in this advice\n\n"
             "Respond in this exact JSON format (no markdown, just raw JSON):\n"
             '{"recommendations": "...", "concerns": ["...", "..."], "confidence": 85}'
@@ -364,18 +446,32 @@ def get_ai_advice(owner, schedule: dict, status_callback=None) -> dict:
             return result
         task_pool_str = "\n".join(
             f"  - {t['task']} | pet: {t['pet']} | {int(t['duration'])} min | {t['priority']} priority"
+            f" | {t.get('frequency') or 'one-time'}"
+            + (f" | slot: {t['preferred_slot']}" if t.get("preferred_slot") else "")
+            + (f" | requires: {t['depends_on']}" if t.get("depends_on") else "")
             for t in all_tasks
+        )
+        upcoming_tasks = schedule.get("upcoming", [])
+        completed_tasks = schedule.get("completed", [])
+        already_done = upcoming_tasks + completed_tasks
+        already_done_str = (
+            "\n".join(f"  - {t['task']} (already done — satisfies any 'requires' dependency)" for t in already_done)
+            if already_done else "  (none)"
         )
         windows_str = ", ".join(f"{s}-{e}" for s, e in owner.time_available)
 
         revised_schedule_message = (
             "Now produce a revised pet care schedule based on your recommendations and critique.\n\n"
             f"Available tasks (use exact names and pets from this list only):\n{task_pool_str}\n\n"
+            f"Already-completed tasks (DO NOT reschedule — these satisfy any 'requires' dependency):\n{already_done_str}\n\n"
             f"Owner time windows: {windows_str} (total: {int(owner.time_available_minutes)} min)\n\n"
             "Rules:\n"
             "- Only use task and pet names exactly as shown above\n"
             f"- Total duration of entries must not exceed {int(owner.time_available_minutes)} minutes\n"
             "- Assign realistic HH:MM start times within the time windows\n"
+            "- If a task has 'requires: X', X must either appear in entries OR be listed as already completed above\n"
+            "- If a task has a 'slot: X', schedule it within that time window (morning=before 12:00, afternoon=12:00–17:00, evening=after 17:00)\n"
+            "- Do not schedule tasks at overlapping times\n"
             "- Tasks you choose not to include go in 'skipped'\n\n"
             "Respond in this exact JSON format (no markdown, just raw JSON):\n"
             '{"entries": [{"time": "HH:MM", "task": "Task Name", "pet": "Pet Name", '

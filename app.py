@@ -158,17 +158,17 @@ def _task_table_with_delete(pet: "Pet") -> bool:
         cols = st.columns(col_widths)
         for col, header in zip(cols[:7], headers[:7]):
             col.markdown(f"**{header}**")
-        for task in list(pet.tasks):
+        for i, task in enumerate(list(pet.tasks)):
             cols = st.columns(col_widths)
             checked = cols[0].checkbox(
-                "",
+                "placeholder",
                 value=task.completed,
-                key=f"chk_{pet.name}_{task.name}",
+                key=f"chk_{pet.name}_{i}",
                 label_visibility="collapsed",
             )
             if checked != task.completed:
                 try:
-                    Scheduler(owner=st.session_state.owner).complete_task(pet.name, task.name)
+                    Scheduler(owner=st.session_state.owner).complete_task_by_index(pet.name, i)
                     st.session_state.pop("last_schedule", None)
                     st.session_state.pop("last_advice", None)
                     changed = True
@@ -187,8 +187,9 @@ def _task_table_with_delete(pet: "Pet") -> bool:
             cols[4].write(task.frequency.title() if task.frequency else "—")
             cols[5].write(task.preferred_slot.title() if task.preferred_slot else "—")
             cols[6].write(task.depends_on or "—")
-            if cols[7].button("🗑 ", key=f"del_{pet.name}_{task.name}"):
-                pet.remove_task(task.name)
+            if cols[7].button("🗑 ", key=f"del_{pet.name}_{i}"):
+                logger.info("Task deleted: pet='%s', task='%s'", pet.name, task.name)
+                pet.remove_task_by_index(i)
                 st.session_state.pop("last_schedule", None)
                 st.session_state.pop("last_advice", None)
                 deleted = True
@@ -293,6 +294,7 @@ if "owner" not in st.session_state:
     st.session_state.owner = Owner(name=owner_name)
 else:
     if st.session_state.owner.name != owner_name:
+        logger.info("Owner name changed: '%s' → '%s'", st.session_state.owner.name, owner_name)
         st.session_state.owner.name = owner_name
         st.session_state.pop("last_schedule", None)
         st.session_state.pop("last_advice", None)
@@ -334,8 +336,7 @@ def _normalize_time_input(t: str) -> str:
     if ":" in t:
         try:
             h, mn = map(int, t.split(":"))
-            if h >= 24 or mn >= 60:
-                t = f"{h % 24:02d}:{mn % 60:02d}"
+            t = f"{h:02d}:{mn:02d}"
         except ValueError:
             pass
     return t
@@ -359,19 +360,23 @@ with col_add_w:
     if st.button("Add Window"):
         try:
             st.session_state.owner.add_time_window(win_start, win_end)
+            logger.info("Time window added: owner='%s', window='%s'–'%s'", st.session_state.owner.name, win_start, win_end)
             st.session_state.pop("last_schedule", None)
             st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
+            logger.warning("Add time window failed: owner='%s', window='%s'–'%s', error=%s", st.session_state.owner.name, win_start, win_end, e)
             st.error(str(e))
 with col_rem_w:
     if st.button("Remove Window"):
         try:
             st.session_state.owner.remove_time_window(win_start, win_end)
+            logger.info("Time window removed: owner='%s', window='%s'–'%s'", st.session_state.owner.name, win_start, win_end)
             st.session_state.pop("last_schedule", None)
             st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
+            logger.warning("Remove time window failed: owner='%s', window='%s'–'%s', error=%s", st.session_state.owner.name, win_start, win_end, e)
             st.error(str(e))
 
 
@@ -388,6 +393,7 @@ if st.session_state.owner.pets:
             st.write(f"- {pet.name} ({pet.species.title()})")
         with col_del:
             if st.button("✕", key=f"remove_{pet.name}"):
+                logger.info("Pet removed: owner='%s', pet='%s'", st.session_state.owner.name, pet.name)
                 st.session_state.owner.remove_pet(pet.name)
                 st.session_state.pop("last_schedule", None)
                 st.session_state.pop("last_advice", None)
@@ -401,10 +407,12 @@ species = st.selectbox("Species", ["Dog", "Cat", "Rabbit", "Bird", "Guinea Pig",
 if st.button("Add Pet"):
     try:
         st.session_state.owner.add_pet(Pet(name=pet_name, species=species.lower()))
+        logger.info("Pet added: owner='%s', pet='%s', species='%s'", st.session_state.owner.name, pet_name, species.lower())
         st.session_state.pop("last_schedule", None)
         st.session_state.pop("last_advice", None)
         st.rerun()
     except ValueError as e:
+        logger.warning("Add pet failed: owner='%s', pet='%s', error=%s", st.session_state.owner.name, pet_name, e)
         st.error(str(e))
 
 
@@ -415,7 +423,6 @@ if st.button("Add Pet"):
 st.subheader("Tasks")
 
 pet_names = [p.name for p in st.session_state.owner.pets]
-Scheduler(owner=st.session_state.owner).reset_due_recurring_tasks()
 
 if pet_names:
     selected_pet_name = st.selectbox("Select Pet", pet_names)
@@ -430,7 +437,7 @@ if pet_names:
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        task_title = st.text_input("Task Title", value="Morning walk").title()
+        task_title = st.text_input("Task Title", value="Feed").title()
     with col2:
         duration = st.number_input("Duration (minutes)", min_value=1, max_value=240, value=20)
     with col3:
@@ -460,10 +467,15 @@ if pet_names:
                 preferred_slot=preferred_slot,
                 depends_on=depends_on,
             ))
+            logger.info(
+                "Task added: pet='%s', task='%s', duration=%d, priority='%s', frequency=%s, slot=%s",
+                selected_pet_name, task_title, duration, priority.lower(), frequency, preferred_slot,
+            )
             st.session_state.pop("last_schedule", None)
             st.session_state.pop("last_advice", None)
             st.rerun()
         except ValueError as e:
+            logger.warning("Add task failed: pet='%s', task='%s', error=%s", selected_pet_name, task_title, e)
             st.error(str(e))
 
 else:
@@ -532,8 +544,10 @@ else:
                     status_callback=st.write,
                 )
                 if advice.get("error"):
+                    logger.error("AI Advisor error: owner='%s', error=%s", st.session_state.owner.name, advice["error"])
                     ai_status.update(label="AI advisor encountered an error.", state="error")
                 else:
+                    logger.info("AI Advisor finished: owner='%s', confidence=%s", st.session_state.owner.name, advice.get("confidence"))
                     ai_status.update(label="AI advisor finished!", state="complete")
             st.session_state["last_advice"] = advice
 
