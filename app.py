@@ -154,7 +154,7 @@ def _task_table_with_delete(pet: "Pet") -> bool:
     changed = False
     with st.container(border=True):
         headers = ["Done", "Task", "Duration", "Priority", "Frequency", "Slot", "Depends On", ""]
-        col_widths = [0.65, 1.4, 1.0, 1.1, 1.3, 1.3, 1.4, 0.6]
+        col_widths = [7.5, 15.75, 11.5, 12.5, 15, 15, 15.75, 7.5]
         cols = st.columns(col_widths)
         for col, header in zip(cols[:7], headers[:7]):
             col.markdown(f"**{header}**")
@@ -383,32 +383,29 @@ st.subheader("Pets")
 
 if st.session_state.owner.pets:
     for pet in st.session_state.owner.pets:
-        st.write(f"- {pet.name} ({pet.species.title()})")
+        col_pet, col_del = st.columns([14, 1])
+        with col_pet:
+            st.write(f"- {pet.name} ({pet.species.title()})")
+        with col_del:
+            if st.button("✕", key=f"remove_{pet.name}"):
+                st.session_state.owner.remove_pet(pet.name)
+                st.session_state.pop("last_schedule", None)
+                st.session_state.pop("last_advice", None)
+                st.rerun()
 else:
     st.info("No pets added yet.")
 
 pet_name = st.text_input("Pet Name", value="Mochi").title()
 species = st.selectbox("Species", ["Dog", "Cat", "Rabbit", "Bird", "Guinea Pig", "Hamster", "Reptile", "Fish", "Other"])
 
-col_add, col_rem = st.columns(2)
-with col_add:
-    if st.button("Add Pet"):
-        try:
-            st.session_state.owner.add_pet(Pet(name=pet_name, species=species.lower()))
-            st.session_state.pop("last_schedule", None)
-            st.session_state.pop("last_advice", None)
-            st.rerun()
-        except ValueError as e:
-            st.error(str(e))
-with col_rem:
-    if st.button("Remove Pet"):
-        try:
-            st.session_state.owner.remove_pet(pet_name)
-            st.session_state.pop("last_schedule", None)
-            st.session_state.pop("last_advice", None)
-            st.rerun()
-        except ValueError as e:
-            st.error(str(e))
+if st.button("Add Pet"):
+    try:
+        st.session_state.owner.add_pet(Pet(name=pet_name, species=species.lower()))
+        st.session_state.pop("last_schedule", None)
+        st.session_state.pop("last_advice", None)
+        st.rerun()
+    except ValueError as e:
+        st.error(str(e))
 
 
 # ---------------------------------------------------------------------------
