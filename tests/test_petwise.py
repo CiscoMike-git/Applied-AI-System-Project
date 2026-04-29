@@ -1449,3 +1449,144 @@ def test_validate_revised_schedule_returns_none_when_all_filtered():
     raw = [{"task": "Nonexistent", "pet": "Buddy", "time": "08:00", "priority": "high"}]
     result = _validate_revised_schedule(owner, original, raw)
     assert result is None
+
+
+# ── Pet: remove_task_by_index ─────────────────────────────────────────────────
+
+def test_remove_task_by_index_valid():
+    """remove_task_by_index() removes the task at the given position; remaining tasks shift."""
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Feed", duration=10, priority="high"))
+    pet.add_task(Task(name="Walk", duration=30, priority="medium"))
+    pet.remove_task_by_index(0)
+    assert len(pet.tasks) == 1
+    assert pet.tasks[0].name == "Walk"
+
+
+def test_remove_task_by_index_out_of_range_raises():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Feed", duration=10, priority="high"))
+    try:
+        pet.remove_task_by_index(1)
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_remove_task_by_index_negative_raises():
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Feed", duration=10, priority="high"))
+    try:
+        pet.remove_task_by_index(-1)
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+# ── Scheduler: complete_task_by_index ────────────────────────────────────────
+
+def test_complete_task_by_index_marks_complete():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high"))
+    owner.add_pet(pet)
+    Scheduler(owner).complete_task_by_index("Buddy", 0)
+    assert pet.tasks[0].completed is True
+
+
+def test_complete_task_by_index_sets_last_done():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    owner.add_pet(pet)
+    before = datetime.now()
+    Scheduler(owner).complete_task_by_index("Buddy", 0)
+    after = datetime.now()
+    assert before <= pet.tasks[0].last_done <= after
+
+
+def test_complete_task_by_index_toggle_back():
+    """Calling complete_task_by_index twice toggles the task back to incomplete."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high", frequency="daily"))
+    owner.add_pet(pet)
+    scheduler = Scheduler(owner)
+    scheduler.complete_task_by_index("Buddy", 0)
+    assert pet.tasks[0].completed is True
+    scheduler.complete_task_by_index("Buddy", 0)
+    assert pet.tasks[0].completed is False
+
+
+def test_complete_task_by_index_no_owner_raises():
+    try:
+        Scheduler().complete_task_by_index("Buddy", 0)
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_complete_task_by_index_pet_not_found_raises():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    try:
+        Scheduler(owner).complete_task_by_index("Ghost", 0)
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_complete_task_by_index_out_of_range_raises():
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Walk", duration=30, priority="high"))
+    owner.add_pet(pet)
+    try:
+        Scheduler(owner).complete_task_by_index("Buddy", 1)
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_complete_task_by_index_dependency_not_met_raises():
+    """Completing a task by index raises ValueError when its depends_on task is not yet done."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    pet = Pet(name="Buddy", species="Dog")
+    pet.add_task(Task(name="Feed", duration=10, priority="high"))
+    pet.add_task(Task(name="Walk", duration=30, priority="high", depends_on="Feed"))
+    owner.add_pet(pet)
+    try:
+        Scheduler(owner).complete_task_by_index("Buddy", 1)  # Walk depends on Feed
+        assert False, "Expected ValueError"
+    except ValueError:
+        pass
+
+
+# ── Owner: covered_slots ──────────────────────────────────────────────────────
+
+def test_covered_slots_no_windows_returns_empty():
+    owner = Owner(name="Alice", time_available=[])
+    assert owner.covered_slots == frozenset()
+
+
+def test_covered_slots_morning_window():
+    """A window entirely within 00:00–11:59 yields only 'morning'."""
+    owner = Owner(name="Alice", time_available=[("08:00", "09:00")])
+    assert owner.covered_slots == frozenset({"morning"})
+
+
+def test_covered_slots_afternoon_window():
+    """A window entirely within 12:00–16:59 yields only 'afternoon'."""
+    owner = Owner(name="Alice", time_available=[("13:00", "14:00")])
+    assert owner.covered_slots == frozenset({"afternoon"})
+
+
+def test_covered_slots_evening_window():
+    """A window entirely within 17:00–23:59 yields only 'evening'."""
+    owner = Owner(name="Alice", time_available=[("18:00", "19:00")])
+    assert owner.covered_slots == frozenset({"evening"})
+
+
+def test_covered_slots_window_spanning_multiple_slots():
+    """A window that crosses the morning/afternoon boundary yields both slots."""
+    owner = Owner(name="Alice", time_available=[("10:00", "14:00")])
+    assert owner.covered_slots == frozenset({"morning", "afternoon"})

@@ -54,7 +54,7 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
                       │
                       ▼
 ┌──────────────────────────────────────────────┐
-│      CORE SCHEDULER  (pawpal_system.py)      │
+│     CORE SCHEDULER  (petwise_system.py)      │
 │  1. Filter incomplete tasks                  │
 │  2. 0/1 Knapsack — select optimal task set   │
 │  3. Sort by priority + pet grouping          │
@@ -94,8 +94,8 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 │  ← Human reviews and acts here               │
 └──────────────────────────────────────────────┘
 
-  Testing:  pytest tests/test_pawpal.py
-  (129 unit tests covering all layers above)
+  Testing:  pytest tests/test_petwise.py
+  (158 unit tests covering all layers above)
 ```
 
 ---
@@ -136,9 +136,9 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 
 7. **Run the test suite**
    ```
-   pytest tests/test_pawpal.py
+   pytest tests/test_petwise.py
    ```
-   129 unit tests cover all layers: input validation, scheduling algorithms, conflict detection, task recurrence, knowledge base retrieval, and AI advisor guardrail utilities.
+   158 unit tests cover all layers: input validation, scheduling algorithms, conflict detection, task recurrence, knowledge base retrieval, and AI advisor guardrail utilities.
 
 ---
 
@@ -174,7 +174,7 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 
 **Testing the AI:**
 
-- **129 automated unit tests** via `pytest` provides coverage for the base system, knowledge base, and AI advisor utilities
+- **158 automated unit tests** via `pytest` provides coverage for the base system, knowledge base, and AI advisor utilities
 - **Confidence scoring** — every AI run surfaces a 0–100 confidence score, color-coded in the UI so the owner can gauge reliability at a glance; the self-critique turn recalibrates the score against the owner's actual constraints, meaning the final number reflects the model's honest reassessment of its own output
 - **Logging and error handling** — all AI advisor activity and human-initiated actions are written to dedicated log files, providing a full audit trail of system behavior; API failures degrade gracefully with informative messages, and AI-generated schedules that fail validation are filtered out entirely rather than displayed to the user
 - **Human evaluation** — the UI shows the AI-revised schedule side-by-side with the original, alongside the confidence score and self-critique, so the owner has full context to compare and decide what to act on
@@ -208,8 +208,8 @@ Petwise is organized as a six-layer pipeline: user input flows into a determinis
 - *Notify users of dependency cycles:* The topological sort silently falls back to the original task order when a cycle is detected. Surfacing a warning in the UI would make this behavior visible rather than invisible to the user.
 - *Replace keyword matching with embedding-based retrieval:* The current RAG retrieval is sensitive to exact task name phrasing. Switching to vector embeddings would make retrieval more robust to paraphrasing and improve chunk relevance for edge cases.
 - *Add multi-model agreement:* A second model pass or a separate evaluator model could cross-check the AI advisor's revised schedule against the original, flagging large deviations for the user to review rather than accepting the revision silently.
-- *cybersecurity* TODO add context here and change heading
-- *make knowledge base dynamic and auto-updating* TODO add context here and change heading
+- *Audit prompt inputs for injection risk:* Pet names, task names, and owner name are injected verbatim into AI prompts. A crafted input (e.g., a task named "Ignore previous instructions and…") could manipulate model behavior. Sanitizing or escaping these fields before prompt construction would prevent prompt injection.
+- *Make the knowledge base dynamic and auto-updating:* The knowledge base is currently maintained as static, hand-curated Python strings. Connecting it to a curated veterinary API or document store with scheduled refreshes would keep guidance current without manual edits each time best practices change.
 
 **Collaboration with AI during this project**
 
